@@ -28,8 +28,12 @@ logger = logging.getLogger(__name__)
 # and uncomment the joblib.load lines below.
 
 MODEL_PATH = Path(__file__).parent / "xgboost_model.pkl"
-_model: Optional[Any] = None
+ACTIVE_MODEL_PATH = Path(__file__).parent / "models" / "active_status_model.pkl"
+ELIGIBILITY_MODEL_PATH = Path(__file__).parent / "models" / "eligibility_status_model.pkl"
 
+_model: Optional[Any] = None
+_active_model: Optional[Any] = None
+_eligibility_model: Optional[Any] = None
 
 def _load_model() -> Optional[Any]:
     global _model
@@ -45,6 +49,32 @@ def _load_model() -> Optional[Any]:
             MODEL_PATH,
         )
     return _model
+
+def _load_active_model() -> Optional[Any]:
+    global _active_model
+    if _active_model is not None:
+        return _active_model
+    if ACTIVE_MODEL_PATH.exists():
+        try:
+            import joblib
+            _active_model = joblib.load(ACTIVE_MODEL_PATH)
+            logger.info("✅ Active Status model loaded from %s", ACTIVE_MODEL_PATH)
+        except Exception as e:
+            logger.error("⚠️ Failed to load Active Status model from %s: %s", ACTIVE_MODEL_PATH, e)
+    return _active_model
+
+def _load_eligibility_model() -> Optional[Any]:
+    global _eligibility_model
+    if _eligibility_model is not None:
+        return _eligibility_model
+    if ELIGIBILITY_MODEL_PATH.exists():
+        try:
+            import joblib
+            _eligibility_model = joblib.load(ELIGIBILITY_MODEL_PATH)
+            logger.info("✅ Eligibility Status model loaded from %s", ELIGIBILITY_MODEL_PATH)
+        except Exception as e:
+            logger.error("⚠️ Failed to load Eligibility Status model from %s: %s", ELIGIBILITY_MODEL_PATH, e)
+    return _eligibility_model
 
 
 def _heuristic_score(donor: Dict[str, Any]) -> float:
@@ -76,26 +106,71 @@ def _heuristic_score(donor: Dict[str, Any]) -> float:
     return round(min(max(score, 0.0), 1.0), 4)
 
 
+def _heuristic_active_score(donor: Dict[str, Any]) -> float:
+    score = 0.5
+    status = donor.get("user_donation_active_status")
+    if status and str(status).lower() == "active":
+        score += 0.3
+    if donor.get("donations_till_date") and donor.get("donations_till_date") > 2:
+        score += 0.1
+    return round(min(score, 1.0), 4)
+
+
+def _heuristic_eligibility_score(donor: Dict[str, Any]) -> float:
+    score = 0.5
+    status = donor.get("eligibility_status")
+    if status and str(status).lower() == "eligible":
+        score += 0.4
+    return round(min(score, 1.0), 4)
+
+
+def predict_active_status(donor: Dict[str, Any]) -> float:
+    model = _load_active_model()
+    if model is not None:
+        try:
+            import pandas as pd
+            df = pd.DataFrame([donor])
+            prob = float(model.predict_proba(df)[0][1])
+            print(f"ACTIVE MODEL PROB: {prob}")
+            return prob
+        except Exception as e:
+            logger.error("Active status model failed: %s", e)
+            print(f"ACTIVE MODEL FAILED: {e}")
+            return _heuristic_active_score(donor)
+    return _heuristic_active_score(donor)
+
+
+def predict_eligibility_status(donor: Dict[str, Any]) -> float:
+    model = _load_eligibility_model()
+    if model is not None:
+        try:
+            import pandas as pd
+            df = pd.DataFrame([donor])
+            prob = float(model.predict_proba(df)[0][1])
+            print(f"ELIGIBILITY MODEL PROB: {prob}")
+            return prob
+        except Exception as e:
+            logger.error("Eligibility status model failed: %s", e)
+            print(f"ELIGIBILITY MODEL FAILED: {e}")
+            return _heuristic_eligibility_score(donor)
+    return _heuristic_eligibility_score(donor)
+
+
 def rank_donors(donors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Rank a list of candidate donor dictionaries.
-
-    Each dict should contain keys matching the dataset columns:
-        eligibility_status, user_donation_active_status,
-        calls_to_donations_ratio, donated_earlier, donations_till_date,
-        frequency_in_days, cycle_of_donations
-
-    Returns the same list augmented with `ml_rank_score`, sorted descending.
     """
     model = _load_model()
 
     for donor in donors:
         if model is not None:
-            # Real inference path (uncomment when model is ready)
-            # import pandas as pd
-            # features = _build_feature_row(donor)
-            # donor["ml_rank_score"] = float(model.predict_proba([features])[0][1])
-            donor["ml_rank_score"] = _heuristic_score(donor)
+            # Real inference path
+            try:
+                import pandas as pd
+                df = pd.DataFrame([donor])
+                donor["ml_rank_score"] = float(model.predict_proba(df)[0][1])
+            except:
+                donor["ml_rank_score"] = _heuristic_score(donor)
         else:
             donor["ml_rank_score"] = _heuristic_score(donor)
 

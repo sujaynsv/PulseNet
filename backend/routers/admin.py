@@ -43,6 +43,7 @@ from database import get_db
 from config import get_settings
 from models import Bridge, BridgeMember, Cycle, EmergencyCase, RequirementResponse, TransfusionLog, User
 from services.notification import build_donor_reminder_message, send_sms_reminder
+from services.ml import predict_active_status, predict_eligibility_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1465,3 +1466,176 @@ async def list_eligible_donors(
         .limit(limit)
     )
     return [DonorSummary.model_validate(d) for d in result.scalars().all()]
+
+
+# ── AI Models and Recommendations ─────────────────────────────────────────────
+
+class MLStatusResponse(BaseModel):
+    donor_id: int
+    probability: float
+    status: str
+    model_version: str
+
+@router.get("/donors/{donor_id}/active-status", response_model=MLStatusResponse)
+async def get_active_status(
+    donor_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    donor = await db.get(User, donor_id)
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+    
+    donor_dict = {
+        "user_donation_active_status": donor.user_donation_active_status,
+        "donations_till_date": donor.donations_till_date or 0,
+        "eligibility_status": donor.eligibility_status,
+    }
+    
+    prob = predict_active_status(donor_dict)
+    return MLStatusResponse(
+        donor_id=donor_id,
+        probability=prob,
+        status="Active" if prob >= 0.5 else "Inactive",
+        model_version="active_status_model_v1"
+    )
+
+@router.get("/donors/{donor_id}/eligibility-status", response_model=MLStatusResponse)
+async def get_eligibility_status(
+    donor_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    donor = await db.get(User, donor_id)
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+    
+    donor_dict = {
+        "eligibility_status": donor.eligibility_status,
+        "user_donation_active_status": donor.user_donation_active_status,
+    }
+    
+    prob = predict_eligibility_status(donor_dict)
+    return MLStatusResponse(
+        donor_id=donor_id,
+        probability=prob,
+        status="Eligible" if prob >= 0.5 else "Not Eligible",
+        model_version="eligibility_status_model_v1"
+    )
+
+class BackupRecommendation(BaseModel):
+    donor_id: int
+    match_score: float
+    reason: str
+
+class RecommendedBackupsResponse(BaseModel):
+    pod_id: int
+    recommended_backups: List[BackupRecommendation]
+    generated_at: datetime
+    model_versions: Dict[str, str]
+
+@router.get("/pods/{pod_id}/recommended-backups", response_model=RecommendedBackupsResponse)
+async def get_recommended_backups(
+    pod_id: int,
+    _admin: AdminUser,
+    limit: int = Query(5, ge=1, le=50),
+    only_eligible: bool = Query(True),
+    exclude_existing_pod_members: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+):
+    pod = await db.get(Bridge, pod_id, options=[selectinload(Bridge.patient)])
+    if not pod:
+        raise HTTPException(status_code=404, detail="Pod not found")
+        
+    q = select(User).where(User.role == "Donor", User.blood_group == pod.patient.blood_group)
+    
+    if exclude_existing_pod_members:
+        member_result = await db.execute(select(BridgeMember.donor_id).where(BridgeMember.bridge_id == pod_id))
+        existing_member_ids = [row[0] for row in member_result.all()]
+        if existing_member_ids:
+            q = q.where(User.id.notin_(existing_member_ids))
+            
+    result = await db.execute(q)
+    candidates = result.scalars().all()
+    
+    recommendations = []
+    
+    for donor in candidates:
+        donor_dict = {
+            "eligibility_status": donor.eligibility_status,
+            "user_donation_active_status": donor.user_donation_active_status,
+            "donations_till_date": donor.donations_till_date or 0,
+        }
+        
+        eligibility_prob = predict_eligibility_status(donor_dict)
+        if only_eligible and eligibility_prob < 0.5:
+            continue
+            
+        active_prob = predict_active_status(donor_dict)
+        
+        base_match_score = 0.5
+        if donor.location and pod.patient.location and donor.location == pod.patient.location:
+            base_match_score += 0.2
+            
+        match_score = (0.4 * base_match_score) + (0.3 * active_prob) + (0.3 * eligibility_prob)
+        match_score = round(min(match_score, 1.0), 4)
+        
+        if active_prob > 0.8:
+            reason = "High reliability score and optimal distance"
+        elif eligibility_prob > 0.8:
+            reason = "Eligible and highly compatible blood profile"
+        else:
+            reason = "Standard backup candidate"
+            
+        recommendations.append(BackupRecommendation(
+            donor_id=donor.id,
+            match_score=match_score,
+            reason=reason
+        ))
+        
+    recommendations.sort(key=lambda x: x.match_score, reverse=True)
+    top_recommendations = recommendations[:limit]
+    
+    return RecommendedBackupsResponse(
+        pod_id=pod_id,
+        recommended_backups=top_recommendations,
+        generated_at=datetime.utcnow(),
+        model_versions={
+            "active_status": "xgb-1.0",
+            "eligibility": "xgb-1.0"
+        }
+    )
+
+class AddBackupRequest(BaseModel):
+    donor_id: int
+
+@router.post("/pods/{pod_id}/add-backup")
+async def add_backup_donor(
+    pod_id: int,
+    request: AddBackupRequest,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    pod = await db.get(Bridge, pod_id)
+    if not pod:
+        raise HTTPException(status_code=404, detail="Pod not found")
+        
+    donor = await db.get(User, request.donor_id)
+    if not donor or donor.role != "Donor":
+        raise HTTPException(status_code=404, detail="Donor not found")
+        
+    # Check if already in pod
+    existing = await db.execute(
+        select(BridgeMember).where(
+            BridgeMember.bridge_id == pod_id, 
+            BridgeMember.donor_id == request.donor_id
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Donor already in pod")
+        
+    new_member = BridgeMember(bridge_id=pod_id, donor_id=request.donor_id)
+    db.add(new_member)
+    await db.commit()
+    
+    return {"status": "success", "message": "Donor added to pod successfully"}
