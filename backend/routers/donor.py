@@ -21,7 +21,8 @@ from sqlalchemy.orm import selectinload
 
 from auth import DonorUser
 from database import get_db
-from models import Bridge, BridgeMember, TransfusionLog, User
+from models import Bridge, BridgeMember, TransfusionLog, User, Cycle, Requirement, RequirementResponse
+from routers.patient import calculate_confidence_score
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,6 +47,14 @@ class DonorProfile(BaseModel):
     donations_till_date: int | None
     last_donation_date: date | None
     next_eligible_date: date | None
+    
+    # New fields
+    locality: str | None
+    preferred_center: str | None
+    contact_preference: str | None
+    general_availability: str | None
+    bridge_preference: bool | None
+    travel_radius: int | None
 
     class Config:
         from_attributes = True
@@ -58,6 +67,12 @@ class UpdateProfileRequest(BaseModel):
     gender: str | None = None
     age: int | None = None
     location: str | None = None
+    locality: str | None = None
+    preferred_center: str | None = None
+    contact_preference: str | None = None
+    general_availability: str | None = None
+    bridge_preference: bool | None = None
+    travel_radius: int | None = None
 
 
 class MyBridgeResponse(BaseModel):
@@ -76,6 +91,23 @@ class LogDonationRequest(BaseModel):
     donation_date: date
     hospital: str | None = None
     notes: str | None = None
+
+
+class DonorRequirementResponse(BaseModel):
+    requirement_id: int
+    external_requirement_id: str
+    patient_name: str | None
+    blood_group: str | None
+    severity: str
+    trigger_type: str
+    units_needed: int
+    date_needed: date
+    center_name: str | None
+    my_response_status: str
+
+
+class RespondRequirementRequest(BaseModel):
+    status: str  # "confirmed" | "declined"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -112,6 +144,13 @@ async def update_my_profile(
         setattr(donor, field, value)
     await db.commit()
     await db.refresh(donor)
+    
+    # Trigger pod assignment if donor is willing to donate via Blood Bridge
+    if donor.bridge_preference:
+        from services.matching import assign_donor_to_pod
+        await assign_donor_to_pod(donor.id, db)
+        await db.refresh(donor)
+        
     return DonorProfile.model_validate(donor)
 
 
@@ -225,3 +264,176 @@ async def get_donation_history(
         }
         for log in logs
     ]
+
+
+@router.get("/me/requirements", response_model=list[DonorRequirementResponse])
+async def get_my_requirements(
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+
+    # 1. Find if donor is member of any bridge
+    member_res = await db.execute(
+        select(BridgeMember).where(BridgeMember.donor_id == donor.id).limit(1)
+    )
+    member = member_res.scalar_one_or_none()
+    if not member:
+        return []
+
+    # 2. Get bridge patient details
+    bridge_res = await db.execute(
+        select(Bridge).where(Bridge.id == member.bridge_id).options(selectinload(Bridge.patient))
+    )
+    bridge = bridge_res.scalar_one_or_none()
+    if not bridge or not bridge.patient:
+        return []
+
+    patient = bridge.patient
+
+    # 3. Fetch active requirements for this patient
+    reqs_res = await db.execute(
+        select(Requirement)
+        .where(Requirement.patient_id == patient.id)
+        .where(Requirement.status.notin_(["fulfilled", "unresolved"]))
+        .order_by(Requirement.created_at.desc())
+    )
+    requirements = reqs_res.scalars().all()
+
+    out = []
+    for req in requirements:
+        # Resolve due date, units needed, and center
+        due_date = patient.expected_next_transfusion_date or (date.today() + timedelta(days=2))
+        units_needed = 2
+        
+        if req.cycle_id:
+            cycle = await db.get(Cycle, req.cycle_id)
+            if cycle:
+                due_date = cycle.due_date
+                units_needed = cycle.expected_units
+
+        center_name = patient.location or "Care Center"
+
+        # Resolve donor's response status
+        resp_res = await db.execute(
+            select(RequirementResponse)
+            .where(RequirementResponse.requirement_id == req.id)
+            .where(RequirementResponse.donor_id == donor.id)
+            .limit(1)
+        )
+        resp = resp_res.scalar_one_or_none()
+        
+        # If no response object exists yet, default to pending (and create it so state is tracked)
+        if not resp:
+            resp = RequirementResponse(
+                requirement_id=req.id,
+                donor_id=donor.id,
+                status="pending"
+            )
+            db.add(resp)
+            await db.flush()
+            my_status = "pending"
+        else:
+            my_status = resp.status
+
+        out.append(DonorRequirementResponse(
+            requirement_id=req.id,
+            external_requirement_id=req.external_requirement_id,
+            patient_name=patient.name,
+            blood_group=patient.blood_group,
+            severity=req.severity,
+            trigger_type=req.trigger_type,
+            units_needed=units_needed,
+            date_needed=due_date,
+            center_name=center_name,
+            my_response_status=my_status
+        ))
+
+    await db.commit()
+    return out
+
+
+@router.post("/me/requirements/{requirement_id}/respond")
+async def respond_to_requirement(
+    requirement_id: int,
+    body: RespondRequirementRequest,
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import func
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+
+    # 1. Fetch requirement
+    requirement = await db.get(Requirement, requirement_id)
+    if not requirement:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    # 2. Get/Create response record for this donor
+    resp_res = await db.execute(
+        select(RequirementResponse)
+        .where(RequirementResponse.requirement_id == requirement_id)
+        .where(RequirementResponse.donor_id == donor.id)
+        .limit(1)
+    )
+    resp = resp_res.scalar_one_or_none()
+    if not resp:
+        resp = RequirementResponse(
+            requirement_id=requirement_id,
+            donor_id=donor.id,
+            status="pending"
+        )
+        db.add(resp)
+
+    # 3. Determine if confirmation is a regular confirmation or standby
+    final_status = body.status
+    if body.status == "confirmed":
+        # Check expected units
+        expected_units = 2
+        if requirement.cycle_id:
+            cycle = await db.get(Cycle, requirement.cycle_id)
+            if cycle:
+                expected_units = cycle.expected_units or 2
+
+        # Count other confirmed responses
+        confirmed_count = (await db.execute(
+            select(func.count(RequirementResponse.id))
+            .where(RequirementResponse.requirement_id == requirement_id)
+            .where(RequirementResponse.status == "confirmed")
+            .where(RequirementResponse.donor_id != donor.id)
+        )).scalar() or 0
+
+        if confirmed_count >= expected_units:
+            final_status = "standby"
+        else:
+            final_status = "confirmed"
+
+    # Update response status
+    resp.status = final_status
+
+    # 4. If confirmed/standby or declined, recalculate the confidence score
+    await db.flush()
+    score_data = await calculate_confidence_score(requirement_id, db)
+    
+    # Update requirement status & severity
+    requirement.status = score_data["status"]
+    requirement.severity = score_data["status"]
+
+    # Update cycle status and confidence score if applicable
+    if requirement.cycle_id:
+        cycle = await db.get(Cycle, requirement.cycle_id)
+        if cycle:
+            cycle.confidence_score = score_data["score"]
+            cycle.status = score_data["status"]
+
+    # Increase reliability score if donor showed up after confirming
+    if final_status in ["confirmed", "standby"]:
+        donor.calls_to_donations_ratio = min(1.0, (donor.calls_to_donations_ratio or 0.8) + 0.02)
+
+    await db.commit()
+
+    return {
+        "message": f"Successfully responded to requirement as {final_status}",
+        "status": final_status,
+        "requirement_status": requirement.status,
+        "confidence_score": score_data["score"]
+    }

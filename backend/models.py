@@ -58,6 +58,14 @@ class User(Base):
     frequency_in_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     inactive_trigger_comment: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
+    # Added columns for complete Donor Flow (Flow 1)
+    locality: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    preferred_center: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_preference: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    general_availability: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    bridge_preference: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
+    travel_radius: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     # Patient-specific columns
     expected_next_transfusion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     transfusion_frequency_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=18)
