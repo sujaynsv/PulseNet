@@ -226,8 +226,9 @@ export function EmergencyBoard() {
     refetchInterval: 30000,
   })
 
-  const open = cases?.filter(c => !c.case_closed) ?? []
-  const closed = cases?.filter(c => c.case_closed) ?? []
+  const validCases = Array.isArray(cases) ? cases : (cases as any)?.data || (cases as any)?.emergencies || []
+  const open = validCases.filter((c: any) => !c.case_closed)
+  const closed = validCases.filter((c: any) => c.case_closed)
 
   return (
     <div style={{ maxWidth: 1200 }}>
