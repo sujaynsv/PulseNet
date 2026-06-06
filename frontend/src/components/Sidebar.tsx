@@ -1,32 +1,54 @@
-import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, Heart, LogOut, Activity, User as UserIcon, Calendar } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router-dom'
+import {
+  LayoutDashboard, Users, Heart, LogOut, Activity,
+  User as UserIcon, GitBranch, Clock, Zap, MapPin
+} from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '../lib/api'
+
+// Live emergency count for badge
+function useOpenEmergencies(enabled: boolean) {
+  return useQuery({
+    queryKey: ['emergencies'],
+    queryFn: () => api.get('/api/admin/emergencies').then(r => (r.data as any[]).length),
+    enabled,
+    refetchInterval: 30000,
+  })
+}
 
 export function Sidebar() {
-  const { role, logout } = useAuth();
+  const { role, logout } = useAuth()
+  const location = useLocation()
+  const isAdmin = role === 'Admin'
+  const { data: openEmergencies } = useOpenEmergencies(isAdmin)
 
   const getNavItems = () => {
     switch (role) {
       case 'Admin':
         return [
-          { to: '/admin', label: 'Dashboard', Icon: LayoutDashboard },
-          { to: '/admin/patients',  label: 'Patients',  Icon: Heart },
-        ];
+          { to: '/admin', label: 'Dashboard', Icon: LayoutDashboard, exact: true },
+          { to: '/admin/pods', label: 'Pod Centre', Icon: GitBranch },
+          { to: '/admin/cycles', label: 'Cycles', Icon: Clock },
+          { to: '/admin/emergencies', label: 'Emergencies', Icon: Zap, badge: openEmergencies ?? 0 },
+          { to: '/admin/centers', label: 'Centers', Icon: MapPin },
+          { to: '/admin/patients', label: 'Patients', Icon: Heart },
+        ]
       case 'Donor':
         return [
           { to: '/donor', label: 'My Profile', Icon: UserIcon },
-        ];
+        ]
       case 'Patient':
         return [
           { to: '/patient', label: 'My Bridge', Icon: GitBranchIcon },
           { to: '/patient/profile', label: 'My Profile', Icon: UserIcon },
-        ];
+        ]
       default:
-        return [];
+        return []
     }
-  };
+  }
 
-  const NAV_ITEMS = getNavItems();
+  const NAV_ITEMS = getNavItems()
 
   return (
     <aside className="sidebar" style={{ padding: '0', display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -56,26 +78,41 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav style={{ padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+      <nav style={{ padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1, overflowY: 'auto' }}>
         <div style={{ fontSize: 10, color: 'var(--clr-muted)', letterSpacing: '0.12em', textTransform: 'uppercase', padding: '8px 8px 4px', fontWeight: 600 }}>
-          Main Menu
+          {role === 'Admin' ? 'Command Centre' : 'Main Menu'}
         </div>
-        {NAV_ITEMS.map(({ to, label, Icon }) => (
+        {NAV_ITEMS.map(({ to, label, Icon, badge, exact }: any) => (
           <NavLink
             key={to}
             to={to}
-            end
+            end={exact}
             className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+            style={{ position: 'relative' }}
           >
             <Icon size={16} />
             {label}
+            {badge > 0 && (
+              <span style={{
+                marginLeft: 'auto',
+                minWidth: 18, height: 18,
+                background: '#ef4444',
+                color: '#fff',
+                borderRadius: 9,
+                fontSize: 10, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                padding: '0 5px',
+              }}>
+                {badge}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>
 
       {/* Logout button */}
       <div style={{ padding: '16px 12px', borderTop: '1px solid var(--clr-border)' }}>
-        <button 
+        <button
           onClick={logout}
           className="nav-link w-full text-left flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors"
         >
