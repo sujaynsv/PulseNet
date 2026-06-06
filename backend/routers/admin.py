@@ -1029,51 +1029,59 @@ async def send_donor_whatsapp_reminder(
     message_body = f"Hi {donor.name}, you're requested to donate blood for {patient_name} on {due_date}. Please reply '1' to confirm YES, or '2' for NO."
 
     # --- Create RequirementResponse so UI tracks the pending status ---
-    from models import Requirement, RequirementResponse
-    import uuid
-    
-    req_result = await db.execute(
-        select(Requirement)
-        .where(Requirement.patient_id == member.bridge.patient_id)
-        .order_by(Requirement.created_at.desc())
-        .limit(1)
-    )
-    req = req_result.scalar_one_or_none()
-
-    if not req:
-        req = Requirement(
-            external_requirement_id=f"REQ-{uuid.uuid4().hex[:8]}",
-            patient_id=member.bridge.patient_id,
-            trigger_type="system",
-            status="matching"
+    if member and member.bridge:
+        from models import Requirement, RequirementResponse
+        import uuid
+        
+        req_result = await db.execute(
+            select(Requirement)
+            .where(Requirement.patient_id == member.bridge.patient_id)
+            .order_by(Requirement.created_at.desc())
+            .limit(1)
         )
-        db.add(req)
-        await db.flush()
+        req = req_result.scalar_one_or_none()
 
-    existing_rr = await db.execute(
-        select(RequirementResponse)
-        .where(RequirementResponse.requirement_id == req.id)
-        .where(RequirementResponse.donor_id == donor.id)
-    )
-    rr = existing_rr.scalar_one_or_none()
-    if not rr:
-        rr = RequirementResponse(
-            requirement_id=req.id,
-            donor_id=donor.id,
-            status="pending"
+        if not req:
+            req = Requirement(
+                external_requirement_id=f"REQ-{uuid.uuid4().hex[:8]}",
+                patient_id=member.bridge.patient_id,
+                trigger_type="system",
+                status="matching"
+            )
+            db.add(req)
+            await db.flush()
+
+        existing_rr = await db.execute(
+            select(RequirementResponse)
+            .where(RequirementResponse.requirement_id == req.id)
+            .where(RequirementResponse.donor_id == donor.id)
         )
-        db.add(rr)
-    else:
-        rr.status = "pending"
-    
-    await db.commit()
+        rr = existing_rr.scalar_one_or_none()
+        if not rr:
+            rr = RequirementResponse(
+                requirement_id=req.id,
+                donor_id=donor.id,
+                status="pending"
+            )
+            db.add(rr)
+        else:
+            rr.status = "pending"
+        
+        await db.commit()
     # ----------------------------------------------------------------
 
     from config import settings
     from twilio.rest import Client
 
     if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
-        raise HTTPException(status_code=500, detail="Twilio credentials are not configured on the server.")
+        logger.warning("Twilio credentials not configured. Simulating WhatsApp notification.")
+        return {
+            "message": "WhatsApp reminder simulated (No Twilio keys)",
+            "donor": donor.name,
+            "phone": donor.phone,
+            "platform": "whatsapp",
+            "demo": True,
+        }
 
     try:
         client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
