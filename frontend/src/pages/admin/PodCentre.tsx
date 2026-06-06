@@ -112,27 +112,7 @@ function PodRow({ pod, onSuggestBackups }: { pod: Pod, onSuggestBackups: (bridge
 
       {/* Action */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {pod.status !== 'healthy' ? (
-          <button
-            onClick={() => refillMutation.mutate()}
-            disabled={refillMutation.isPending}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 14px',
-              background: 'rgba(192,25,44,0.15)',
-              border: '1px solid rgba(192,25,44,0.4)',
-              borderRadius: 8,
-              color: '#C0191C',
-              fontSize: 12, fontWeight: 600,
-              cursor: refillMutation.isPending ? 'not-allowed' : 'pointer',
-              opacity: refillMutation.isPending ? 0.7 : 1,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <RefreshCw size={13} className={refillMutation.isPending ? 'animate-spin' : ''} />
-            {refillMutation.isPending ? 'Refilling…' : 'AI Refill'}
-          </button>
-        ) : (
+        {pod.status === 'healthy' && (
           <span style={{ fontSize: 11, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 4 }}>
             <CheckCircle size={13} /> Covered
           </span>
@@ -325,17 +305,6 @@ export function PodCentre() {
                       </div>
                       <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
                     </div>
-                    <button 
-                      onClick={() => addBackupMutation.mutate({ pod_id: selectedBridgeId!, donor_id: rec.donor_id })}
-                      disabled={addBackupMutation.isPending}
-                      style={{
-                      padding: '6px 12px', background: '#f1f5f9', color: '#0f172a',
-                      borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', 
-                      cursor: addBackupMutation.isPending ? 'not-allowed' : 'pointer',
-                      opacity: addBackupMutation.isPending ? 0.7 : 1
-                    }}>
-                      Add
-                    </button>
                   </div>
                 ))}
               </div>
