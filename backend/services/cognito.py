@@ -49,8 +49,10 @@ def create_demo_token(sub: str, email: str, role: Role, settings: Settings) -> s
 
 def _cognito_client(settings: Settings):
     import os
-    if "AWS_SESSION_TOKEN" in os.environ and not os.environ["AWS_SESSION_TOKEN"]:
-        os.environ.pop("AWS_SESSION_TOKEN")
+    # Aggressively remove any lingering session token from the shell environment
+    # so boto3 doesn't implicitly use an expired one when you just want to use IAM keys.
+    if "AWS_SESSION_TOKEN" in os.environ:
+        del os.environ["AWS_SESSION_TOKEN"]
 
     kwargs = {
         "region_name": settings.COGNITO_REGION,

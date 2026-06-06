@@ -1,290 +1,248 @@
 /**
- * PulseNet — Admin Dashboard Page
- * ================================
- * Proves full end-to-end connectivity by making TWO parallel API calls:
- *   1. GET /api/health       → backend alive?
- *   2. GET /api/admin/stats  → DB connected and data returned?
- *   3. GET /api/admin/bridge/mock → ML ranking service working?
- *
- * All rendered on one screen so the team can verify the stack is live
- * immediately after `docker compose up`.
+ * PulseNet — Admin Command Centre Dashboard
+ * City-level operational overview for Hyderabad
+ * Design: Industrial Command Room — dark precision ops
  */
 
 import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle, AlertCircle, Activity, Users, GitBranch, TrendingDown, Brain, Droplets, Bell } from 'lucide-react'
-import { StatCard } from '@/components/StatCard'
+import {
+  Activity, AlertTriangle, CheckCircle, Users, GitBranch,
+  Droplets, Zap, ChevronDown, Bell, TrendingDown, Clock
+} from 'lucide-react'
 import { api } from '@/lib/api'
-type CandidateDonor = any;
 
-const fetchHealth = () => api.get('/api/health').then(res => res.data);
-const fetchStats = () => api.get('/api/admin/stats').then(res => res.data);
-const fetchMockBridge = () => api.get('/api/admin/bridge/mock').then(res => res.data);
+const fetchCommandStats = () => api.get('/api/admin/command-stats').then(r => r.data)
+const fetchHealth = () => api.get('/api/health').then(r => r.data)
 
-// ── Connection status badge ───────────────────────────────────────────────────
-function ConnectionBadge({ ok, label }: { ok: boolean; label: string }) {
+const CITIES = [
+  { name: 'Hyderabad', active: true },
+  { name: 'Mumbai', active: false },
+  { name: 'Delhi', active: false },
+  { name: 'Bangalore', active: false },
+  { name: 'Chennai', active: false },
+]
+
+function CitySelector() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 14px',
+          background: 'rgba(192,25,44,0.12)',
+          border: '1px solid rgba(192,25,44,0.3)',
+          borderRadius: 8,
+          color: '#f1f5f9',
+          fontSize: 13, fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px #22c55e' }} />
+        Hyderabad
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, marginTop: 4,
+          background: '#0f1117', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 10, overflow: 'hidden', zIndex: 100, minWidth: 180,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+        }}>
+          {CITIES.map(c => (
+            <div
+              key={c.name}
+              onClick={() => { if (c.active) setOpen(false) }}
+              style={{
+                padding: '10px 16px',
+                display: 'flex', alignItems: 'center', gap: 10,
+                color: c.active ? '#f1f5f9' : '#475569',
+                fontSize: 13, fontWeight: c.active ? 600 : 400,
+                cursor: c.active ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: c.active ? '#22c55e' : '#334155' }} />
+              {c.name}
+              {!c.active && <span style={{ fontSize: 10, color: '#475569', marginLeft: 'auto' }}>Soon</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type StatTileProps = {
+  label: string
+  value: number | string
+  sub?: string
+  icon: React.ReactNode
+  color?: string
+  pulse?: boolean
+  alert?: boolean
+}
+function StatTile({ label, value, sub, icon, color = '#C0191C', pulse, alert }: StatTileProps) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '8px 16px',
-      background: ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-      border: `1px solid ${ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)'}`,
-      borderRadius: 10,
-      fontSize: 13,
-      fontWeight: 500,
-      color: ok ? '#22c55e' : '#ef4444',
+      background: 'rgba(255,255,255,0.03)',
+      border: `1px solid ${alert ? 'rgba(239,68,68,0.35)' : 'rgba(255,255,255,0.06)'}`,
+      borderRadius: 14,
+      padding: '20px 24px',
+      position: 'relative',
+      overflow: 'hidden',
     }}>
-      {ok ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
-      {label}
+      {alert && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          boxShadow: 'inset 0 0 24px rgba(239,68,68,0.07)',
+          pointerEvents: 'none',
+        }} />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div style={{ color, opacity: 0.85 }}>{icon}</div>
+        {pulse && (
+          <div style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: alert ? '#ef4444' : '#22c55e',
+            boxShadow: `0 0 8px ${alert ? '#ef4444' : '#22c55e'}`,
+            animation: 'pulse 2s ease-in-out infinite',
+          }} />
+        )}
+      </div>
+      <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 32, fontWeight: 700, color: '#f1f5f9', lineHeight: 1 }}>
+        {value}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--clr-muted)', marginTop: 6, fontWeight: 500 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
 
-// ── Donor rank row ────────────────────────────────────────────────────────────
-function DonorRankRow({ donor, rank }: { donor: CandidateDonor; rank: number }) {
-  const score = Math.round(donor.ml_rank_score * 100)
-  return (
-    <div className="donor-row">
-      {/* Rank number */}
-      <div style={{
-        width: 28, height: 28, borderRadius: '50%',
-        background: rank === 1 ? 'var(--clr-blood)' : 'rgba(255,255,255,0.06)',
-        color: rank === 1 ? '#fff' : 'var(--clr-muted)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 12, fontWeight: 700, flexShrink: 0,
-      }}>
-        {rank}
-      </div>
-
-      {/* Name + meta */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9' }}>{donor.name}</div>
-        <div style={{ fontSize: 12, color: 'var(--clr-muted)', marginTop: 2 }}>
-          {donor.blood_group} · {donor.distance_km} km away · {donor.donations_till_date} donations
-        </div>
-      </div>
-
-      {/* Eligibility badge */}
-      <span className={`badge ${donor.eligibility_status === 'eligible' ? 'badge-eligible' : 'badge-inactive'}`}>
-        {donor.eligibility_status}
-      </span>
-
-      {/* Score bar */}
-      <div style={{ width: 100, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9' }}>{score}%</div>
-        <div className="score-bar-track" style={{ width: '100%' }}>
-          <div className="score-bar-fill" style={{ width: `${score}%` }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Dashboard page ────────────────────────────────────────────────────────────
 export function AdminDashboard() {
-  const [snsStatus, setSnsStatus] = useState<string | null>(null)
-  const [snsLoading, setSnsLoading] = useState(false)
-
+  const stats = useQuery({ queryKey: ['command-stats'], queryFn: fetchCommandStats, refetchInterval: 30000 })
   const health = useQuery({ queryKey: ['health'], queryFn: fetchHealth, retry: 1 })
-  const stats  = useQuery({ queryKey: ['stats'],  queryFn: fetchStats,  retry: 1 })
-  const bridge = useQuery({ queryKey: ['bridge'], queryFn: fetchMockBridge, retry: 1 })
 
+  const s = stats.data
   const backendOk = health.data?.status === 'ok'
-  const dbOk      = !stats.isError && stats.data !== undefined
-
-  const handleTestSMS = async () => {
-    setSnsLoading(true)
-    setSnsStatus('Sending test SMS via Demo Mode...')
-    try {
-      const res = await api.post('/api/admin/notify/1')
-      setSnsStatus(`Success: ${res.data.message} (Demo: ${res.data.demo})`)
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-        setSnsStatus('Connected! (Donor 1 not in DB, but API and routing work perfectly)')
-      } else {
-        setSnsStatus(`Error: ${err.message}`)
-      }
-    } finally {
-      setSnsLoading(false)
-    }
-  }
 
   return (
     <div style={{ maxWidth: 1200 }}>
-      {/* ── Page header ──────────────────────────────────────────────────── */}
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 28, fontFamily: 'var(--font-display)', fontWeight: 700 }}>
-          <span className="gradient-text">PulseNet</span> Command Centre
-        </h1>
-        <p style={{ color: 'var(--clr-muted)', fontSize: 14, marginTop: 6 }}>
-          AI-enabled care coordination for Blood Warriors Foundation — Thalassemia Patient Support
-        </p>
-      </div>
-
-      {/* ── Live connection status row ──────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 32, flexWrap: 'wrap' }}>
-        <ConnectionBadge
-          ok={!health.isLoading && backendOk}
-          label={health.isLoading ? 'Checking backend…' : backendOk ? 'FastAPI Backend · Online' : 'Backend · Offline'}
-        />
-        <ConnectionBadge
-          ok={!stats.isLoading && dbOk}
-          label={stats.isLoading ? 'Checking database…' : dbOk ? 'AWS RDS · Connected' : 'Database · Error'}
-        />
-        <ConnectionBadge
-          ok={!bridge.isLoading && !bridge.isError}
-          label={bridge.isLoading ? 'Loading ML…' : !bridge.isError ? `ML Ranking · ${bridge.data?.model_used ?? 'active'}` : 'ML · Error'}
-        />
-      </div>
-
-      {/* ── Demo Mode SMS Testing ────────────────────────────────────────── */}
-      <div style={{ marginBottom: 32, padding: 20, background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-          <div>
-            <h3 style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Bell size={18} style={{ color: '#3b82f6' }}/>
-              Test SMS Integration (Fallback)
-            </h3>
-            <p style={{ color: 'var(--clr-muted)', fontSize: 13, marginTop: 4 }}>
-              Clicking this will simulate an AWS SNS text message and print it to the FastAPI terminal.
-            </p>
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 32, flexWrap: 'wrap', gap: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, color: '#475569', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
+            Blood Warriors · Command Centre
           </div>
-          <button 
-            onClick={handleTestSMS}
-            disabled={snsLoading}
-            style={{ 
-              background: '#3b82f6', color: 'white', padding: '8px 16px', borderRadius: 8, 
-              fontWeight: 500, fontSize: 14, border: 'none', cursor: snsLoading ? 'not-allowed' : 'pointer',
-              opacity: snsLoading ? 0.7 : 1
+          <h1 style={{ fontSize: 28, fontFamily: 'var(--font-display)', fontWeight: 700, lineHeight: 1 }}>
+            <span className="gradient-text">Hyderabad</span> Operations
+          </h1>
+          <p style={{ color: 'var(--clr-muted)', fontSize: 13, marginTop: 6 }}>
+            {s ? `Live as of ${new Date().toLocaleTimeString()} · ${s.as_of}` : 'Loading operational data...'}
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <CitySelector />
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '8px 14px',
+            background: backendOk ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+            border: `1px solid ${backendOk ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
+            borderRadius: 8, fontSize: 12, fontWeight: 500,
+            color: backendOk ? '#22c55e' : '#ef4444',
+          }}>
+            {backendOk ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+            {backendOk ? 'Systems Online' : 'Backend Offline'}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Stats Grid ── */}
+      {stats.isLoading ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 16, marginBottom: 40 }}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 130, borderRadius: 14 }} />
+          ))}
+        </div>
+      ) : stats.isError ? (
+        <div style={{ color: '#ef4444', fontSize: 14, marginBottom: 40, padding: 20, background: 'rgba(239,68,68,0.08)', borderRadius: 12, border: '1px solid rgba(239,68,68,0.2)' }}>
+          ⚠️ Could not load command stats — ensure backend is running.
+        </div>
+      ) : s ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 16, marginBottom: 40 }}>
+          <StatTile label="Active Pods" value={s.active_pods} sub="Blood bridges running" icon={<GitBranch size={20} />} color="#60a5fa" pulse />
+          <StatTile label="Cycles · Next 7d" value={s.cycles_next_7_days} sub="Upcoming transfusions" icon={<Activity size={20} />} color="#a78bfa" pulse />
+          <StatTile label="At-Risk Cycles" value={s.at_risk_cycles} sub="Need coordinator review" icon={<AlertTriangle size={20} />} color="#f59e0b" alert={s.at_risk_cycles > 0} pulse />
+          <StatTile label="Open Emergencies" value={s.open_emergencies} sub="Unresolved cases" icon={<Zap size={20} />} color="#ef4444" alert={s.open_emergencies > 0} pulse />
+          <StatTile label="Eligible Donors" value={s.eligible_donors} sub={`of ${s.total_donors} total`} icon={<Droplets size={20} />} color="#22c55e" />
+          <StatTile label="Total Donors" value={s.total_donors} sub="Registered in Hyderabad" icon={<Users size={20} />} color="#C0191C" />
+        </div>
+      ) : null}
+
+      {/* ── Risk Ribbon ── */}
+      {s && (s.at_risk_cycles > 0 || s.open_emergencies > 0) && (
+        <div style={{
+          marginBottom: 32,
+          padding: '16px 20px',
+          background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.2)',
+          borderRadius: 12,
+          display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center',
+        }}>
+          <AlertTriangle size={16} style={{ color: '#f59e0b', flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>Attention Required</span>
+          {s.at_risk_cycles > 0 && (
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>
+              {s.at_risk_cycles} cycle{s.at_risk_cycles > 1 ? 's' : ''} at risk in the next 7 days →{' '}
+              <a href="/admin/cycles" style={{ color: '#f59e0b', fontWeight: 600, textDecoration: 'none' }}>Review Cycles</a>
+            </span>
+          )}
+          {s.open_emergencies > 0 && (
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>
+              {s.open_emergencies} emergency case{s.open_emergencies > 1 ? 's' : ''} open →{' '}
+              <a href="/admin/emergencies" style={{ color: '#ef4444', fontWeight: 600, textDecoration: 'none' }}>Emergency Board</a>
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── Quick links grid ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+        {[
+          { href: '/admin/pods', icon: <GitBranch size={20} />, title: 'Pod Command Centre', desc: 'View all patient pods sorted by health score. Trigger AI refill for at-risk bridges.', color: '#60a5fa' },
+          { href: '/admin/cycles', icon: <Clock size={20} />, title: '7-Day Cycle Readiness', desc: 'All transfusion cycles due this week with confidence scores and risk states.', color: '#a78bfa' },
+          { href: '/admin/emergencies', icon: <Zap size={20} />, title: 'Emergency Board', desc: 'Track and resolve open emergency cases through the 5-step resolution workflow.', color: '#ef4444' },
+          { href: '/admin/centers', icon: <Activity size={20} />, title: 'Center Stress View', desc: 'Hyderabad hospital/location stress levels derived from patient and donor density.', color: '#22c55e' },
+          { href: '/admin/patients', icon: <Users size={20} />, title: 'Patient Directory', desc: 'Manage individual patient records, generate transfusion cycles, and view bridges.', color: '#C0191C' },
+          { href: '/admin/donors', icon: <Droplets size={20} />, title: 'Donor Directory', desc: 'Browse and filter the full donor pool by blood group, status, and eligibility.', color: '#f59e0b' },
+        ].map(item => (
+          <a
+            key={item.href}
+            href={item.href}
+            style={{
+              display: 'block',
+              padding: '20px 24px',
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              borderRadius: 14,
+              textDecoration: 'none',
+              transition: 'border-color 0.2s, background 0.2s',
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.borderColor = item.color + '55'
+              ;(e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'
+              ;(e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'
             }}
           >
-            {snsLoading ? 'Testing...' : 'Send Test SMS'}
-          </button>
-        </div>
-        {snsStatus && (
-          <div style={{ marginTop: 12, padding: 12, background: 'rgba(255,255,255,0.05)', borderRadius: 6, fontSize: 13, color: '#f1f5f9' }}>
-            {snsStatus}
-          </div>
-        )}
-      </div>
-
-      {/* ── Stats grid ───────────────────────────────────────────────────── */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-        gap: 16,
-        marginBottom: 40,
-      }}>
-        {stats.isLoading ? (
-          Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton" style={{ height: 120 }} />
-          ))
-        ) : stats.isError ? (
-          <div style={{ gridColumn: '1/-1', color: '#ef4444', fontSize: 14 }}>
-            ⚠️ Could not load stats — ensure backend is running and DATABASE_URL is set.
-          </div>
-        ) : stats.data ? (
-          <>
-            <StatCard
-              label="Total Users"
-              value={stats.data.total_users.toLocaleString()}
-              sub="Donors + volunteers registered"
-              color="var(--clr-blood-light)"
-              icon={<Users size={20} />}
-            />
-            <StatCard
-              label="Active Bridges"
-              value={stats.data.active_bridges}
-              sub={`of ${stats.data.total_bridges} total`}
-              color="#60a5fa"
-              icon={<GitBranch size={20} />}
-            />
-            <StatCard
-              label="Eligible Donors"
-              value={stats.data.eligible_donors}
-              sub="Ready to donate now"
-              color="#22c55e"
-              icon={<Droplets size={20} />}
-            />
-            <StatCard
-              label="Active Donors"
-              value={stats.data.active_donors}
-              sub="Engaged in last cycle"
-              color="var(--clr-accent)"
-              icon={<Activity size={20} />}
-            />
-            <StatCard
-              label="Fatigue Risk"
-              value={stats.data.donor_fatigue_risk}
-              sub="Need re-engagement"
-              color="#f87171"
-              icon={<TrendingDown size={20} />}
-            />
-          </>
-        ) : null}
-      </div>
-
-      {/* ── Mock Bridge — Ranked donors section ──────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-        {/* Patient card */}
-        <div className="glass-card" style={{ padding: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-            <Brain size={16} style={{ color: 'var(--clr-blood-light)' }} />
-            <h2 style={{ fontSize: 16, fontWeight: 600 }}>AI Bridge Matching Demo</h2>
-          </div>
-
-          {bridge.isLoading ? (
-            <div className="skeleton" style={{ height: 120 }} />
-          ) : bridge.isError ? (
-            <div style={{ color: '#f87171', fontSize: 13 }}>
-              ⚠️ Could not reach /api/admin/bridge/mock
-            </div>
-          ) : bridge.data ? (
-            <>
-              <div style={{
-                padding: '16px 20px',
-                background: 'rgba(192,25,44,0.08)',
-                border: '1px solid rgba(192,25,44,0.2)',
-                borderRadius: 12, marginBottom: 16,
-              }}>
-                <div style={{ fontSize: 11, color: 'var(--clr-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
-                  Patient
-                </div>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>
-                  {bridge.data.patient.name}
-                </div>
-                <div style={{ fontSize: 13, color: 'var(--clr-muted)', marginTop: 4 }}>
-                  {bridge.data.patient.blood_group} · Next transfusion:{' '}
-                  <strong style={{ color: 'var(--clr-accent)' }}>
-                    {bridge.data.patient.next_transfusion_date}
-                  </strong>
-                </div>
-              </div>
-
-              <div style={{ fontSize: 11, color: 'var(--clr-muted)', marginBottom: 8 }}>
-                MODEL: <span style={{ color: 'var(--clr-blood-light)', fontWeight: 600 }}>
-                  {bridge.data.model_used.toUpperCase()}
-                </span> · Generated {bridge.data.generated_at}
-              </div>
-            </>
-          ) : null}
-        </div>
-
-        {/* Ranked donors */}
-        <div className="glass-card" style={{ padding: 24 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
-            Ranked Replacement Donors
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {bridge.isLoading
-              ? Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="skeleton" style={{ height: 64 }} />
-                ))
-              : bridge.data?.ranked_donors.map((donor: CandidateDonor, i: number) => (
-                  <DonorRankRow key={donor.external_id} donor={donor} rank={i + 1} />
-                ))}
-          </div>
-        </div>
+            <div style={{ color: item.color, marginBottom: 12 }}>{item.icon}</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#f1f5f9', marginBottom: 6 }}>{item.title}</div>
+            <div style={{ fontSize: 12, color: 'var(--clr-muted)', lineHeight: 1.6 }}>{item.desc}</div>
+          </a>
+        ))}
       </div>
     </div>
   )

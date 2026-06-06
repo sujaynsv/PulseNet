@@ -1,19 +1,34 @@
 """
 PulseNet — Admin Router (Authenticated: Admin role only)
 =========================================================
-GET  /api/admin/stats                   → Dashboard KPIs
-GET  /api/admin/patients                → All patients (paginated)
-GET  /api/admin/bridge/{patient_id}     → 8-donor cycle panel for a patient
-POST /api/admin/notify/{donor_id}       → Send SNS SMS reminder to donor
-GET  /api/admin/donors                  → All donors (filterable)
-GET  /api/admin/donors/inactive         → Re-engagement targets
+Command Center endpoints:
+
+GET  /api/admin/command-stats            → City-level KPI summary
+GET  /api/admin/pods                     → All patient pods with health score
+POST /api/admin/pods/{patient_id}/ai-refill → Trigger AI donor refill for a pod
+GET  /api/admin/cycles/upcoming          → Cycles due in next 7 days
+GET  /api/admin/emergencies              → All open emergency cases
+POST /api/admin/emergencies              → Create new emergency case
+PATCH /api/admin/emergencies/{id}        → Update resolution checklist step
+GET  /api/admin/center-stress            → Center stress derived from patient locations
+GET  /api/admin/stats                    → Dashboard KPIs (legacy)
+GET  /api/admin/patients                 → All patients (paginated)
+GET  /api/admin/patients/{id}            → Single patient detail
+GET  /api/admin/patients/{id}/cycles     → Patient cycles (admin view)
+POST /api/admin/patients/{id}/generate-cycles → Admin generates cycles for patient
+GET  /api/admin/bridge/mock              → Mock ML ranking demo
+GET  /api/admin/bridge/{patient_id}      → 8-donor cycle panel for a patient
+POST /api/admin/notify/{donor_id}        → Send SNS SMS reminder to donor
+GET  /api/admin/donors                   → All donors (filterable)
+GET  /api/admin/donors/inactive          → Re-engagement targets
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
-from typing import Any
+import uuid
+from datetime import date, datetime, timedelta
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -23,7 +38,7 @@ from sqlalchemy.orm import selectinload
 
 from auth import AdminUser
 from database import get_db
-from models import Bridge, BridgeMember, TransfusionLog, User
+from models import Bridge, BridgeMember, Cycle, EmergencyCase, TransfusionLog, User
 from services.notification import build_donor_reminder_message, send_sms_reminder
 
 logger = logging.getLogger(__name__)
@@ -31,6 +46,93 @@ router = APIRouter()
 
 
 # ── Response schemas ──────────────────────────────────────────────────────────
+
+class CommandStats(BaseModel):
+    city: str
+    active_pods: int
+    cycles_next_7_days: int
+    at_risk_cycles: int
+    open_emergencies: int
+    stressed_centers: int
+    total_donors: int
+    eligible_donors: int
+    as_of: str
+
+
+class PodHealthRow(BaseModel):
+    patient_id: int
+    patient_label: str
+    blood_group: Optional[str]
+    next_cycle_date: Optional[date]
+    confidence_score: int
+    pod_health_score: int
+    active_donors: int
+    sleeping_donors: int
+    cooldown_donors: int
+    total_slots: int
+    bridge_id: Optional[int]
+    status: str  # healthy | at_risk | critical
+
+
+class UpcomingCycleCard(BaseModel):
+    cycle_id: int
+    patient_id: int
+    patient_name: Optional[str]
+    blood_group: Optional[str]
+    due_date: date
+    days_until: int
+    expected_units: int
+    confidence_score: int
+    state: str  # covered | at_risk | critical
+
+
+class EmergencyCaseOut(BaseModel):
+    id: int
+    patient_label: Optional[str]
+    blood_group: Optional[str]
+    center_name: Optional[str]
+    units_needed: int
+    time_critical_by: Optional[datetime]
+    hours_remaining: Optional[float]
+    assigned_donor_name: Optional[str]
+    donor_assigned: bool
+    donor_confirmed: bool
+    center_informed: bool
+    units_arranged: bool
+    case_closed: bool
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CreateEmergencyRequest(BaseModel):
+    patient_label: str
+    blood_group: str
+    center_name: str
+    units_needed: int = 2
+    hours_until_critical: Optional[int] = 24
+
+
+class UpdateEmergencyRequest(BaseModel):
+    donor_assigned: Optional[bool] = None
+    donor_confirmed: Optional[bool] = None
+    center_informed: Optional[bool] = None
+    units_arranged: Optional[bool] = None
+    case_closed: Optional[bool] = None
+    assigned_donor_id: Optional[int] = None
+
+
+class CenterStressRow(BaseModel):
+    center_name: str
+    patient_count: int
+    cycles_next_7_days: int
+    open_emergencies: int
+    eligible_donors_nearby: int
+    stress_score: int
+    stress_level: str  # Low | Moderate | High | Critical
+
 
 class DashboardStats(BaseModel):
     total_users: int
@@ -48,11 +150,11 @@ class DashboardStats(BaseModel):
 class PatientSummary(BaseModel):
     id: int
     external_id: str
-    name: str | None
-    blood_group: str | None
-    expected_next_transfusion_date: date | None
-    transfusion_frequency_days: int | None
-    bridge_id: int | None
+    name: Optional[str]
+    blood_group: Optional[str]
+    expected_next_transfusion_date: Optional[date]
+    transfusion_frequency_days: Optional[int]
+    bridge_id: Optional[int]
     bridge_slots_filled: int
 
     class Config:
@@ -63,23 +165,23 @@ class DonorSlot(BaseModel):
     slot_id: int
     cycle_position: int
     donor_id: int
-    donor_name: str | None
-    donor_phone: str | None
-    blood_group: str | None
-    eligibility_status: str | None
-    user_donation_active_status: str | None
-    last_donation_date: date | None
-    expected_next_donation_date: date | None
+    donor_name: Optional[str]
+    donor_phone: Optional[str]
+    blood_group: Optional[str]
+    eligibility_status: Optional[str]
+    user_donation_active_status: Optional[str]
+    last_donation_date: Optional[date]
+    expected_next_donation_date: Optional[date]
     slot_status: str
     donated_earlier: bool
 
 
 class BridgePanelResponse(BaseModel):
     patient_id: int
-    patient_name: str | None
-    patient_blood_group: str | None
-    next_transfusion_date: date | None
-    bridge_id: int | None
+    patient_name: Optional[str]
+    patient_blood_group: Optional[str]
+    next_transfusion_date: Optional[date]
+    bridge_id: Optional[int]
     total_slots: int
     slots: list[DonorSlot]
 
@@ -87,21 +189,517 @@ class BridgePanelResponse(BaseModel):
 class DonorSummary(BaseModel):
     id: int
     external_id: str
-    name: str | None
-    email: str | None
-    phone: str | None
-    blood_group: str | None
-    eligibility_status: str | None
-    user_donation_active_status: str | None
-    donations_till_date: int | None
-    last_donation_date: date | None
-    next_eligible_date: date | None
+    name: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    blood_group: Optional[str]
+    eligibility_status: Optional[str]
+    user_donation_active_status: Optional[str]
+    donations_till_date: Optional[int]
+    last_donation_date: Optional[date]
+    next_eligible_date: Optional[date]
 
     class Config:
         from_attributes = True
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Helper functions ──────────────────────────────────────────────────────────
+
+def _calc_pod_health(members: list) -> dict:
+    """Derive pod health metrics from bridge members."""
+    if not members:
+        return dict(active=0, sleeping=0, cooldown=0, health=0, status="critical")
+
+    active = sum(1 for m in members if m.slot_status == "Active")
+    cooldown = sum(1 for m in members if m.slot_status in ("Due", "Overdue"))
+    sleeping = sum(1 for m in members if m.slot_status == "Inactive")
+    total = len(members)
+
+    health = round((active / max(total, 1)) * 100)
+    if health >= 75:
+        pod_status = "healthy"
+    elif health >= 40:
+        pod_status = "at_risk"
+    else:
+        pod_status = "critical"
+
+    return dict(active=active, sleeping=sleeping, cooldown=cooldown, health=health, status=pod_status)
+
+
+def _calc_cycle_state(confidence_score: int) -> str:
+    if confidence_score >= 70:
+        return "covered"
+    elif confidence_score >= 40:
+        return "at_risk"
+    return "critical"
+
+
+# ── Command Centre Stats ──────────────────────────────────────────────────────
+
+@router.get("/command-stats", response_model=CommandStats)
+async def command_stats(
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """City-level operational summary."""
+    today = date.today()
+    week_ahead = today + timedelta(days=7)
+
+    total_donors = (await db.execute(
+        select(func.count(User.id)).where(User.role == "Donor")
+    )).scalar_one()
+
+    eligible_donors = (await db.execute(
+        select(func.count(User.id)).where(
+            User.role == "Donor", User.eligibility_status == "eligible"
+        )
+    )).scalar_one()
+
+    total_bridges = (await db.execute(select(func.count(Bridge.id)))).scalar_one()
+    active_bridges = (await db.execute(
+        select(func.count(Bridge.id)).where(Bridge.bridge_status == True)
+    )).scalar_one()
+
+    cycles_7d = (await db.execute(
+        select(func.count(Cycle.id)).where(
+            Cycle.due_date >= today, Cycle.due_date <= week_ahead
+        )
+    )).scalar_one()
+
+    at_risk = (await db.execute(
+        select(func.count(Cycle.id)).where(
+            Cycle.due_date >= today,
+            Cycle.due_date <= week_ahead,
+            Cycle.confidence_score < 70,
+        )
+    )).scalar_one()
+
+    open_emergencies = (await db.execute(
+        select(func.count(EmergencyCase.id)).where(EmergencyCase.case_closed == False)
+    )).scalar_one()
+
+    return CommandStats(
+        city="Hyderabad",
+        active_pods=active_bridges,
+        cycles_next_7_days=cycles_7d,
+        at_risk_cycles=at_risk,
+        open_emergencies=open_emergencies,
+        stressed_centers=0,  # Will be enriched dynamically on center-stress route
+        total_donors=total_donors,
+        eligible_donors=eligible_donors,
+        as_of=today.isoformat(),
+    )
+
+
+# ── Pod Command Centre ────────────────────────────────────────────────────────
+
+@router.get("/pods", response_model=list[PodHealthRow])
+async def list_pods(
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """All patient pods sorted by health score (weakest first)."""
+    result = await db.execute(
+        select(User)
+        .where(User.role == "Patient")
+        .options(
+            selectinload(User.patient_bridge).selectinload(Bridge.members)
+        )
+    )
+    patients = result.scalars().all()
+
+    # Fetch cycles for all patients in one query
+    today = date.today()
+    week_ahead = today + timedelta(days=7)
+    cycles_result = await db.execute(
+        select(Cycle).where(Cycle.due_date >= today).order_by(Cycle.due_date.asc())
+    )
+    all_cycles = cycles_result.scalars().all()
+    cycles_by_patient = {}
+    for c in all_cycles:
+        if c.patient_id not in cycles_by_patient:
+            cycles_by_patient[c.patient_id] = c
+
+    rows: list[PodHealthRow] = []
+    for p in patients:
+        bridge = p.patient_bridge
+        members = bridge.members if bridge else []
+        pod = _calc_pod_health(members)
+        next_cycle = cycles_by_patient.get(p.id)
+
+        # Confidence: use bridge active ratio or fall back to 0
+        if bridge and members:
+            conf = round((pod["active"] / max(len(members), 1)) * 100)
+        else:
+            conf = 0
+
+        rows.append(PodHealthRow(
+            patient_id=p.id,
+            patient_label=p.name or f"Patient #{p.id}",
+            blood_group=p.blood_group,
+            next_cycle_date=next_cycle.due_date if next_cycle else p.expected_next_transfusion_date,
+            confidence_score=conf,
+            pod_health_score=pod["health"],
+            active_donors=pod["active"],
+            sleeping_donors=pod["sleeping"],
+            cooldown_donors=pod["cooldown"],
+            total_slots=len(members) if members else 8,
+            bridge_id=bridge.id if bridge else None,
+            status=pod["status"],
+        ))
+
+    # Sort: critical first, then at_risk, then healthy
+    order = {"critical": 0, "at_risk": 1, "healthy": 2}
+    rows.sort(key=lambda r: (order.get(r.status, 3), r.pod_health_score))
+    return rows
+
+
+@router.post("/pods/{patient_id}/ai-refill")
+async def trigger_ai_refill(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger AI donor refill for a patient pod using the ranked bridge panel."""
+    patient = await db.get(User, patient_id)
+    if not patient or patient.role != "Patient":
+        raise HTTPException(404, "Patient not found")
+
+    bridge_result = await db.execute(
+        select(Bridge)
+        .where(Bridge.patient_id == patient_id)
+        .options(selectinload(Bridge.members).selectinload(BridgeMember.donor))
+    )
+    bridge = bridge_result.scalar_one_or_none()
+    if not bridge:
+        raise HTTPException(404, "No bridge found for this patient. Generate cycles first.")
+
+    # Find eligible donors not already in the pod
+    existing_donor_ids = {m.donor_id for m in bridge.members}
+    candidates_result = await db.execute(
+        select(User).where(
+            User.role == "Donor",
+            User.blood_group == patient.blood_group,
+            User.eligibility_status == "eligible",
+            ~User.id.in_(existing_donor_ids),
+        ).limit(20)
+    )
+    candidates = candidates_result.scalars().all()
+
+    # Fill empty slots (up to 8 total)
+    current_positions = {m.cycle_position for m in bridge.members}
+    available_positions = [p for p in range(1, 9) if p not in current_positions]
+    added = 0
+    for pos, donor in zip(available_positions, candidates):
+        new_member = BridgeMember(
+            bridge_id=bridge.id,
+            donor_id=donor.id,
+            cycle_position=pos,
+            slot_status="Active",
+        )
+        db.add(new_member)
+        added += 1
+
+    await db.commit()
+    return {
+        "message": f"AI refill complete. {added} donor slot(s) filled.",
+        "patient_id": patient_id,
+        "added_slots": added,
+        "total_slots": len(bridge.members) + added,
+    }
+
+
+# ── 7-Day Cycle Readiness ─────────────────────────────────────────────────────
+
+@router.get("/cycles/upcoming", response_model=list[UpcomingCycleCard])
+async def upcoming_cycles(
+    _admin: AdminUser,
+    days: int = Query(7, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cycles due in the next N days (default 7), enriched with patient info."""
+    today = date.today()
+    cutoff = today + timedelta(days=days)
+
+    cycles_result = await db.execute(
+        select(Cycle)
+        .where(Cycle.due_date >= today, Cycle.due_date <= cutoff)
+        .order_by(Cycle.confidence_score.asc())  # most at-risk first
+    )
+    cycles = cycles_result.scalars().all()
+
+    # Batch-fetch patients
+    patient_ids = list({c.patient_id for c in cycles})
+    patients_result = await db.execute(
+        select(User).where(User.id.in_(patient_ids))
+    )
+    patients_by_id = {p.id: p for p in patients_result.scalars().all()}
+
+    cards: list[UpcomingCycleCard] = []
+    for c in cycles:
+        patient = patients_by_id.get(c.patient_id)
+        days_until = (c.due_date - today).days
+        cards.append(UpcomingCycleCard(
+            cycle_id=c.id,
+            patient_id=c.patient_id,
+            patient_name=patient.name if patient else None,
+            blood_group=patient.blood_group if patient else None,
+            due_date=c.due_date,
+            days_until=days_until,
+            expected_units=c.expected_units,
+            confidence_score=c.confidence_score,
+            state=_calc_cycle_state(c.confidence_score),
+        ))
+    return cards
+
+
+# ── Emergency Command Board ───────────────────────────────────────────────────
+
+@router.get("/emergencies", response_model=list[EmergencyCaseOut])
+async def list_emergencies(
+    _admin: AdminUser,
+    include_closed: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """List emergency cases."""
+    q = select(EmergencyCase).options(
+        selectinload(EmergencyCase.patient),
+        selectinload(EmergencyCase.assigned_donor),
+    ).order_by(EmergencyCase.created_at.desc())
+
+    if not include_closed:
+        q = q.where(EmergencyCase.case_closed == False)
+
+    result = await db.execute(q)
+    cases = result.scalars().all()
+
+    out = []
+    for ec in cases:
+        hours_remaining = None
+        if ec.time_critical_by:
+            delta = ec.time_critical_by - datetime.utcnow()
+            hours_remaining = max(delta.total_seconds() / 3600, 0)
+
+        out.append(EmergencyCaseOut(
+            id=ec.id,
+            patient_label=ec.patient_label or (ec.patient.name if ec.patient else None),
+            blood_group=ec.blood_group,
+            center_name=ec.center_name,
+            units_needed=ec.units_needed,
+            time_critical_by=ec.time_critical_by,
+            hours_remaining=round(hours_remaining, 1) if hours_remaining is not None else None,
+            assigned_donor_name=ec.assigned_donor.name if ec.assigned_donor else None,
+            donor_assigned=ec.donor_assigned,
+            donor_confirmed=ec.donor_confirmed,
+            center_informed=ec.center_informed,
+            units_arranged=ec.units_arranged,
+            case_closed=ec.case_closed,
+            status=ec.status,
+            created_at=ec.created_at,
+        ))
+    return out
+
+
+@router.post("/emergencies", response_model=EmergencyCaseOut, status_code=201)
+async def create_emergency(
+    body: CreateEmergencyRequest,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new emergency case."""
+    time_critical = (
+        datetime.utcnow() + timedelta(hours=body.hours_until_critical)
+        if body.hours_until_critical
+        else None
+    )
+    ec = EmergencyCase(
+        patient_label=body.patient_label,
+        blood_group=body.blood_group,
+        center_name=body.center_name,
+        units_needed=body.units_needed,
+        time_critical_by=time_critical,
+        status="open",
+    )
+    db.add(ec)
+    await db.commit()
+    await db.refresh(ec)
+
+    return EmergencyCaseOut(
+        id=ec.id,
+        patient_label=ec.patient_label,
+        blood_group=ec.blood_group,
+        center_name=ec.center_name,
+        units_needed=ec.units_needed,
+        time_critical_by=ec.time_critical_by,
+        hours_remaining=body.hours_until_critical,
+        assigned_donor_name=None,
+        donor_assigned=False,
+        donor_confirmed=False,
+        center_informed=False,
+        units_arranged=False,
+        case_closed=False,
+        status="open",
+        created_at=ec.created_at,
+    )
+
+
+@router.patch("/emergencies/{case_id}", response_model=EmergencyCaseOut)
+async def update_emergency(
+    case_id: int,
+    body: UpdateEmergencyRequest,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update resolution checklist for an emergency case. Auto-closes when all 5 steps done."""
+    ec = await db.get(EmergencyCase, case_id)
+    if not ec:
+        raise HTTPException(404, "Emergency case not found")
+
+    if body.donor_assigned is not None:
+        ec.donor_assigned = body.donor_assigned
+    if body.donor_confirmed is not None:
+        ec.donor_confirmed = body.donor_confirmed
+    if body.center_informed is not None:
+        ec.center_informed = body.center_informed
+    if body.units_arranged is not None:
+        ec.units_arranged = body.units_arranged
+    if body.case_closed is not None:
+        ec.case_closed = body.case_closed
+    if body.assigned_donor_id is not None:
+        ec.assigned_donor_id = body.assigned_donor_id
+
+    # Auto-derive status
+    steps_done = sum([ec.donor_assigned, ec.donor_confirmed, ec.center_informed, ec.units_arranged])
+    if ec.case_closed or steps_done == 4:
+        ec.case_closed = True
+        ec.status = "closed"
+    elif steps_done > 0:
+        ec.status = "partially_covered"
+    else:
+        ec.status = "open"
+
+    await db.commit()
+    await db.refresh(ec)
+
+    hours_remaining = None
+    if ec.time_critical_by:
+        delta = ec.time_critical_by - datetime.utcnow()
+        hours_remaining = max(delta.total_seconds() / 3600, 0)
+
+    donor_name = None
+    if ec.assigned_donor_id:
+        donor = await db.get(User, ec.assigned_donor_id)
+        donor_name = donor.name if donor else None
+
+    return EmergencyCaseOut(
+        id=ec.id,
+        patient_label=ec.patient_label,
+        blood_group=ec.blood_group,
+        center_name=ec.center_name,
+        units_needed=ec.units_needed,
+        time_critical_by=ec.time_critical_by,
+        hours_remaining=round(hours_remaining, 1) if hours_remaining is not None else None,
+        assigned_donor_name=donor_name,
+        donor_assigned=ec.donor_assigned,
+        donor_confirmed=ec.donor_confirmed,
+        center_informed=ec.center_informed,
+        units_arranged=ec.units_arranged,
+        case_closed=ec.case_closed,
+        status=ec.status,
+        created_at=ec.created_at,
+    )
+
+
+# ── Center Stress ─────────────────────────────────────────────────────────────
+
+@router.get("/center-stress", response_model=list[CenterStressRow])
+async def center_stress(
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Derive center stress by grouping patients and donors by location string."""
+    today = date.today()
+    week_ahead = today + timedelta(days=7)
+
+    # All patients with a location
+    patients_result = await db.execute(
+        select(User).where(User.role == "Patient", User.location != None)
+    )
+    patients = patients_result.scalars().all()
+
+    # All eligible donors by location
+    donors_result = await db.execute(
+        select(User).where(
+            User.role == "Donor",
+            User.eligibility_status == "eligible",
+            User.location != None,
+        )
+    )
+    donors = donors_result.scalars().all()
+
+    # All upcoming cycles
+    cycles_result = await db.execute(
+        select(Cycle).where(Cycle.due_date >= today, Cycle.due_date <= week_ahead)
+    )
+    cycles = cycles_result.scalars().all()
+    cycles_by_patient = {}
+    for c in cycles:
+        cycles_by_patient.setdefault(c.patient_id, []).append(c)
+
+    # All open emergencies
+    em_result = await db.execute(
+        select(EmergencyCase).where(EmergencyCase.case_closed == False)
+    )
+    open_em = em_result.scalars().all()
+    em_by_center = {}
+    for em in open_em:
+        key = (em.center_name or "Unknown").lower().strip()
+        em_by_center[key] = em_by_center.get(key, 0) + 1
+
+    # Group by location (normalise to first word for rough matching)
+    location_map: dict[str, dict] = {}
+    for p in patients:
+        loc = (p.location or "Unknown").strip()
+        if loc not in location_map:
+            location_map[loc] = {"patients": [], "cycles_count": 0}
+        location_map[loc]["patients"].append(p.id)
+        location_map[loc]["cycles_count"] += len(cycles_by_patient.get(p.id, []))
+
+    rows = []
+    for loc, data in location_map.items():
+        donor_depth = sum(1 for d in donors if d.location and loc.lower() in d.location.lower())
+        em_count = em_by_center.get(loc.lower().strip(), 0)
+        cycles_count = data["cycles_count"]
+        patient_count = len(data["patients"])
+
+        # Stress formula: more cycles + emergencies, fewer donors = more stress
+        stress_score = cycles_count * 2 + em_count * 5 - min(donor_depth, 10)
+
+        if stress_score <= 2:
+            stress_level = "Low"
+        elif stress_score <= 8:
+            stress_level = "Moderate"
+        elif stress_score <= 15:
+            stress_level = "High"
+        else:
+            stress_level = "Critical"
+
+        rows.append(CenterStressRow(
+            center_name=loc,
+            patient_count=patient_count,
+            cycles_next_7_days=cycles_count,
+            open_emergencies=em_count,
+            eligible_donors_nearby=donor_depth,
+            stress_score=max(stress_score, 0),
+            stress_level=stress_level,
+        ))
+
+    # Sort: most stressed first
+    rows.sort(key=lambda r: r.stress_score, reverse=True)
+    return rows
+
+
+# ── Legacy & Existing Endpoints ───────────────────────────────────────────────
 
 @router.get("/stats", response_model=DashboardStats)
 async def dashboard_stats(
@@ -132,7 +730,6 @@ async def dashboard_stats(
             User.role == "Donor", User.user_donation_active_status == "Inactive"
         )
     )).scalar_one()
-
     total_bridges = (await db.execute(
         select(func.count(Bridge.id))
     )).scalar_one()
@@ -146,7 +743,7 @@ async def dashboard_stats(
         eligible_donors=eligible_donors,
         active_donors=active_donors,
         inactive_donors=inactive_donors,
-        donor_fatigue_risk=inactive_donors, # placeholder logic
+        donor_fatigue_risk=inactive_donors,
         as_of=date.today().isoformat(),
     )
 
@@ -158,7 +755,6 @@ async def list_patients(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """All patients with their bridge slot count."""
     result = await db.execute(
         select(User)
         .where(User.role == "Patient")
@@ -184,9 +780,78 @@ async def list_patients(
     return summaries
 
 
+@router.get("/patients/{patient_id}", response_model=PatientSummary)
+async def get_patient_detail(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    p = await db.get(User, patient_id)
+    if not p or p.role != "Patient":
+        raise HTTPException(404, "Patient not found")
+
+    bridge = (await db.execute(select(Bridge).where(Bridge.patient_id == p.id).options(selectinload(Bridge.members)))).scalar_one_or_none()
+
+    return PatientSummary(
+        id=p.id,
+        external_id=p.external_id,
+        name=p.name,
+        blood_group=p.blood_group,
+        expected_next_transfusion_date=p.expected_next_transfusion_date,
+        transfusion_frequency_days=p.transfusion_frequency_days,
+        bridge_id=bridge.id if bridge else None,
+        bridge_slots_filled=len(bridge.members) if bridge else 0,
+    )
+
+
+@router.get("/patients/{patient_id}/cycles")
+async def get_patient_cycles(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    patient = await db.get(User, patient_id)
+    if not patient or patient.role != "Patient": raise HTTPException(404, "Patient not found")
+
+    cycles = (await db.execute(
+        select(Cycle).where(Cycle.patient_id == patient.id).order_by(Cycle.due_date.asc())
+    )).scalars().all()
+    return cycles
+
+
+@router.post("/patients/{patient_id}/generate-cycles")
+async def generate_patient_cycles(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    patient = await db.get(User, patient_id)
+    if not patient or patient.role != "Patient": raise HTTPException(404, "Patient not found")
+
+    freq = patient.transfusion_frequency_days or 18
+    next_date = patient.expected_next_transfusion_date or (date.today() + timedelta(days=freq))
+
+    for i in range(6):
+        c = Cycle(
+            external_cycle_id=str(uuid.uuid4()),
+            patient_id=patient.id,
+            due_date=next_date + timedelta(days=freq * i),
+            expected_units=2,
+            status="routine",
+            confidence_score=0
+        )
+        db.add(c)
+
+    await db.commit()
+
+    cycles = (await db.execute(
+        select(Cycle).where(Cycle.patient_id == patient.id).order_by(Cycle.due_date.asc())
+    )).scalars().all()
+    return cycles
+
+
 @router.get("/bridge/mock")
 async def get_mock_bridge_panel(_admin: AdminUser):
-    """Mock ML ranked bridge for the demo dashboard."""
     donors = []
     for i in range(1, 9):
         donors.append({
@@ -209,16 +874,13 @@ async def get_mock_bridge_panel(_admin: AdminUser):
         "ranked_donors": donors
     }
 
+
 @router.get("/bridge/{patient_id}", response_model=BridgePanelResponse)
 async def get_bridge_panel(
     patient_id: int,
     _admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    The core admin view — 8-donor cycle wheel for a specific patient.
-    Shows each slot with donation history, next due date, and contact info.
-    """
     patient = await db.get(User, patient_id)
     if patient is None or patient.role != "Patient":
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -226,9 +888,7 @@ async def get_bridge_panel(
     bridge_result = await db.execute(
         select(Bridge)
         .where(Bridge.patient_id == patient_id)
-        .options(
-            selectinload(Bridge.members).selectinload(BridgeMember.donor)
-        )
+        .options(selectinload(Bridge.members).selectinload(BridgeMember.donor))
     )
     bridge = bridge_result.scalar_one_or_none()
 
@@ -236,7 +896,6 @@ async def get_bridge_panel(
     if bridge:
         for member in bridge.members:
             donor = member.donor
-            # Auto-compute slot status
             slot_status = member.slot_status
             if member.expected_next_donation_date:
                 days_until = (member.expected_next_donation_date - date.today()).days
@@ -281,16 +940,12 @@ async def send_donor_reminder(
     _admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Admin clicks 'Send Reminder' → fires SNS SMS to donor's phone.
-    """
     donor = await db.get(User, donor_id)
     if donor is None or donor.role != "Donor":
         raise HTTPException(status_code=404, detail="Donor not found")
     if not donor.phone:
         raise HTTPException(status_code=422, detail="Donor has no phone number on file")
 
-    # Find which patient this donor serves
     member_result = await db.execute(
         select(BridgeMember)
         .where(BridgeMember.donor_id == donor_id)

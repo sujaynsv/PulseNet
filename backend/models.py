@@ -61,6 +61,8 @@ class User(Base):
     # Patient-specific columns
     expected_next_transfusion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     transfusion_frequency_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=18)
+    clinical_alert: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    hb_decline_flag: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Account status
     status: Mapped[str] = mapped_column(String(16), default="active")
@@ -141,6 +143,7 @@ class TransfusionLog(Base):
 
     transfusion_date: Mapped[date] = mapped_column(Date)
     blood_units: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pretransfusion_hb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     hospital: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="completed")
@@ -149,3 +152,82 @@ class TransfusionLog(Base):
 
     # Relationships
     donor: Mapped[Optional["User"]] = relationship("User", foreign_keys=[donor_id], back_populates="transfusion_logs")
+
+
+# ── Cycle (Recurring schedule for a patient) ─────────────────────────────────
+
+class Cycle(Base):
+    __tablename__ = "cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    external_cycle_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    due_date: Mapped[date] = mapped_column(Date)
+    expected_units: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="routine")  # pending, routine, at_risk, emergency, fulfilled
+    confidence_score: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+# ── Requirement (Triggered event for a cycle) ────────────────────────────────
+
+class Requirement(Base):
+    __tablename__ = "requirements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    external_requirement_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    cycle_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cycles.id"), nullable=True)
+    
+    trigger_type: Mapped[str] = mapped_column(String(32))  # scheduled, patient_request, emergency
+    severity: Mapped[str] = mapped_column(String(32), default="routine")  # routine, at_risk, emergency
+    source: Mapped[str] = mapped_column(String(32), default="system")  # system, patient, coordinator
+    status: Mapped[str] = mapped_column(String(32), default="matching")  # pending_verification, matching, covered, fulfilled, unresolved
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+# ── RequirementResponse (Donor confirmation mapping) ─────────────────────────
+
+class RequirementResponse(Base):
+    __tablename__ = "requirement_responses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    requirement_id: Mapped[int] = mapped_column(ForeignKey("requirements.id"))
+    donor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, confirmed, declined
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── Emergency Case (Full resolution workflow tracker) ─────────────────────────
+
+class EmergencyCase(Base):
+    __tablename__ = "emergency_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    # Patient info
+    patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    patient_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # masked or name
+    blood_group: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    center_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    units_needed: Mapped[int] = mapped_column(Integer, default=2)
+    time_critical_by: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Assigned donor (optional)
+    assigned_donor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    # 5-step resolution checklist
+    donor_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+    donor_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    center_informed: Mapped[bool] = mapped_column(Boolean, default=False)
+    units_arranged: Mapped[bool] = mapped_column(Boolean, default=False)
+    case_closed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Overall status: open | partially_covered | closed
+    status: Mapped[str] = mapped_column(String(32), default="open")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    patient: Mapped[Optional["User"]] = relationship("User", foreign_keys=[patient_id])
+    assigned_donor: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assigned_donor_id])
