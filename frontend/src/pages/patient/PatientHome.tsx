@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { Activity, Calendar, Shield, History } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 // Types
 interface Requirement {
@@ -223,6 +224,39 @@ export function PatientHome() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Health Analytics */}
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+        <h3 className="text-lg font-medium mb-6 flex items-center gap-2"><Activity className="w-5 h-5 text-slate-400" /> Pre-Transfusion Hemoglobin Trend</h3>
+        <div className="h-64 w-full">
+          {history.filter(h => h.pretransfusion_hb !== null).length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={[...history].reverse().filter(h => h.pretransfusion_hb !== null)} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis 
+                  dataKey="transfusion_date" 
+                  tickFormatter={(val) => new Date(val).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} 
+                />
+                <YAxis 
+                  domain={['dataMin - 1', 'dataMax + 1']} 
+                  axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dx={-10}
+                />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  labelFormatter={(val) => new Date(val as string).toLocaleDateString()}
+                  formatter={(value: number) => [`${value} g/dL`, 'Hemoglobin']}
+                />
+                <Line type="monotone" dataKey="pretransfusion_hb" stroke="#ef4444" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex items-center justify-center text-sm text-slate-500 bg-slate-50 rounded-lg border border-slate-100">
+              Not enough data to generate trend graph.
+            </div>
+          )}
         </div>
       </div>
 
