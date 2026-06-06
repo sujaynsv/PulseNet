@@ -9,6 +9,8 @@ import { AdminDashboard } from './pages/admin/AdminDashboard'
 import { PatientsList } from './pages/admin/PatientsList'
 import { DonorHome } from './pages/donor/DonorHome'
 import { PatientHome } from './pages/patient/PatientHome'
+import { PatientProfile } from './pages/patient/PatientProfile'
+import { PatientDetails } from './pages/admin/PatientDetails'
 
 const queryClient = new QueryClient()
 
@@ -36,6 +38,7 @@ function App() {
             <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
               <Route path="/admin" element={<AppLayout><AdminDashboard /></AppLayout>} />
               <Route path="/admin/patients" element={<AppLayout><PatientsList /></AppLayout>} />
+              <Route path="/admin/patients/:id" element={<AppLayout><PatientDetails /></AppLayout>} />
             </Route>
 
             {/* Donor Routes */}
@@ -46,6 +49,7 @@ function App() {
             {/* Patient Routes */}
             <Route element={<ProtectedRoute allowedRoles={['Patient']} />}>
               <Route path="/patient" element={<AppLayout><PatientHome /></AppLayout>} />
+              <Route path="/patient/profile" element={<AppLayout><PatientProfile /></AppLayout>} />
             </Route>
 
             {/* Redirect root based on login status / role */}
