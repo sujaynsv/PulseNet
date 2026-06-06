@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { GitBranch, Zap, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react'
+import { GitBranch, Zap, AlertTriangle, CheckCircle, RefreshCw, Users, X } from 'lucide-react'
 import { api } from '@/lib/api'
 
 type Pod = {
@@ -32,7 +32,7 @@ const STATUS_CONFIG = {
   critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.25)',  label: 'Critical', icon: <Zap size={12} /> },
 }
 
-function PodRow({ pod }: { pod: Pod }) {
+function PodRow({ pod, onSuggestBackups }: { pod: Pod, onSuggestBackups: (bridgeId: number) => void }) {
   const qc = useQueryClient()
   const [refillMsg, setRefillMsg] = useState<string | null>(null)
 
@@ -111,7 +111,7 @@ function PodRow({ pod }: { pod: Pod }) {
       </div>
 
       {/* Action */}
-      <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {pod.status !== 'healthy' ? (
           <button
             onClick={() => refillMutation.mutate()}
@@ -137,6 +137,26 @@ function PodRow({ pod }: { pod: Pod }) {
             <CheckCircle size={13} /> Covered
           </span>
         )}
+        
+        {pod.bridge_id && (
+          <button
+            onClick={() => onSuggestBackups(pod.bridge_id!)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px',
+              background: 'rgba(59, 130, 246, 0.15)',
+              border: '1px solid rgba(59, 130, 246, 0.4)',
+              borderRadius: 8,
+              color: '#60a5fa',
+              fontSize: 12, fontWeight: 600,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Users size={13} /> Suggest Backups
+          </button>
+        )}
+        
         {refillMsg && (
           <div style={{ fontSize: 10, color: 'var(--clr-muted)', marginTop: 4, maxWidth: 120 }}>{refillMsg}</div>
         )}
@@ -147,10 +167,27 @@ function PodRow({ pod }: { pod: Pod }) {
 
 export function PodCentre() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'at_risk' | 'critical'>('all')
+  const [selectedBridgeId, setSelectedBridgeId] = useState<number | null>(null)
+  
   const { data: pods, isLoading, isError, refetch } = useQuery({
     queryKey: ['pods'],
     queryFn: fetchPods,
     refetchInterval: 60000,
+  })
+  
+  const { data: backups, isLoading: isLoadingBackups } = useQuery({
+    queryKey: ['recommendedBackups', selectedBridgeId],
+    queryFn: () => api.get(`/api/admin/pods/${selectedBridgeId}/recommended-backups`).then(r => r.data),
+    enabled: !!selectedBridgeId
+  })
+
+  const addBackupMutation = useMutation({
+    mutationFn: (data: { pod_id: number, donor_id: number }) => 
+      api.post(`/api/admin/pods/${data.pod_id}/add-backup`, { donor_id: data.donor_id }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pods'] })
+      qc.invalidateQueries({ queryKey: ['recommendedBackups', selectedBridgeId] })
+    }
   })
 
   const filtered = pods?.filter(p => filterStatus === 'all' || p.status === filterStatus) ?? []
@@ -225,8 +262,91 @@ export function PodCentre() {
             No pods found for this filter.
           </div>
         )}
-        {filtered.map(pod => <PodRow key={pod.patient_id} pod={pod} />)}
+        {filtered.map(pod => <PodRow key={pod.patient_id} pod={pod} onSuggestBackups={setSelectedBridgeId} />)}
       </div>
+
+      {/* Backup Recommendations Modal */}
+      {selectedBridgeId && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100
+        }}>
+          <div style={{
+            background: '#0f172a', border: '1px solid #1e293b', borderRadius: 16,
+            width: 600, maxWidth: '90vw', padding: 24,
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <div>
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Users size={20} color="#60a5fa" />
+                  AI Recommended Backups
+                </h2>
+                <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+                  Powered by Active Status Model & Eligibility Status Model
+                </p>
+              </div>
+              <button onClick={() => setSelectedBridgeId(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {isLoadingBackups ? (
+              <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 12px' }} />
+                Running AI models...
+              </div>
+            ) : backups?.recommended_backups?.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto' }}>
+                {backups.recommended_backups.map((rec: any, idx: number) => (
+                  <div key={rec.donor_id} style={{
+                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+                    borderRadius: 12, padding: 16, display: 'flex', gap: 16, alignItems: 'center'
+                  }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: '50%', background: 'rgba(96, 165, 250, 0.1)',
+                      color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 700, fontSize: 14
+                    }}>
+                      #{idx + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: 14 }}>Donor ID: {rec.donor_id}</span>
+                        <span style={{ 
+                          fontSize: 12, fontWeight: 700, 
+                          color: rec.match_score > 0.8 ? '#22c55e' : '#f59e0b',
+                          background: rec.match_score > 0.8 ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)',
+                          padding: '2px 8px', borderRadius: 12
+                        }}>
+                          {(rec.match_score * 100).toFixed(0)}% Match
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
+                    </div>
+                    <button 
+                      onClick={() => addBackupMutation.mutate({ pod_id: selectedBridgeId!, donor_id: rec.donor_id })}
+                      disabled={addBackupMutation.isPending}
+                      style={{
+                      padding: '6px 12px', background: '#f1f5f9', color: '#0f172a',
+                      borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', 
+                      cursor: addBackupMutation.isPending ? 'not-allowed' : 'pointer',
+                      opacity: addBackupMutation.isPending ? 0.7 : 1
+                    }}>
+                      Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                No compatible backup donors found for this pod.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

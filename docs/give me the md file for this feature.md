@@ -1,288 +1,223 @@
-Here’s a detailed spec you can treat as `docs/ui/donor_dashboard.md` for your dev agents.
+Here’s an MD spec you can drop straight into your repo, consistent with your existing API style and the JSON format you shared.
 
 ***
 
-# Donor Dashboard (PulseNet – Donor Flow)
+# Backup Donor Recommendation API
 
-## Purpose
+## Overview
 
-The Donor Dashboard is the **main home screen** for a donor after onboarding.  
-Instead of a static profile page, it shows:
+This endpoint recommends **backup donors** for a given patient pod or cycle, using:
 
-- Their key info (in a compact header)
-- Their current Blood Bridge pod and patient context
-- Upcoming donation opportunities
-- Impact and history
-- Settings they care about (availability, notification prefs, languages)
+- donor–patient matching (blood group, location, pod need), and  
+- AI signals (Active Status Model, Eligibility Status Model) where available.
 
-The goal is: **“I know who I’m helping, when I’m needed next, how I’m doing, and I can control how and when you contact me.”**
+The output is a ranked list of donors that coordinators can add as **backup** to strengthen a pod or cover a specific upcoming transfusion.
 
 ***
 
-## Page Structure (High-Level)
+## Endpoint: Get Recommended Backup Donors
 
-1. **Top bar / app bar**
-2. **Donor Summary Header** (readable snapshot)
-3. **Upcoming Donation Panel**
-4. **Blood Bridge Pod Panel**
-5. **Impact & History Panel**
-6. **Preferences & Settings**
-7. **Footer / Help & Support**
+### Path
 
-***
+`GET /api/v1/pods/{pod_id}/recommended-backups`
 
-## 1. Top Bar / App Bar
+or (if you want to target a specific cycle):
 
-**Elements**
+`GET /api/v1/cycles/{cycle_id}/recommended-backups`
 
-- App name: `PulseNet | Blood Warriors`
-- City indicator: `Hyderabad`
-- Icon/button: `Help` (opens help / WhatsApp support link)
-- Optional: Sign out icon
+> Choose one style and keep it consistent; this spec assumes `pods/{pod_id}`.
 
-No heavy logic here; just consistent branding + quick access to support.
+### Description
 
-***
+Returns a list of recommended backup donors for the specified pod, sorted by `match_score` (highest first), with a human-readable `reason` for each recommendation.
 
-## 2. Donor Summary Header
+### Query parameters (optional)
 
-**Goal**: Show the donor their identity and status in one glance.
+- `limit` (int, default: 5)  
+  Max number of recommended donors to return.
 
-### Fields Displayed
+- `only_eligible` (bool, default: true)  
+  If true, filters donors using the Eligibility Status Model to those currently predicted as eligible.
 
-- Donor name: `Ravi Kumar`
-- Donor ID: `DW-12345`
-- Blood group badge: `B+`
-- City: `Hyderabad`
-- Status chip:
-  - `ACTIVE`
-  - `ON COOLDOWN` (with “eligible from [date]”)
-  - `INACTIVE` (if they paused participation)
-- Last donation:
-  - `Last donation: 12 May 2026 at [Center Name]`
-- Next eligibility:
-  - `Eligible from: 11 July 2026`
+- `exclude_existing_pod_members` (bool, default: true)  
+  If true, excludes donors who are already part of this pod (primary or backup).
 
-### Actions
+Example:
 
-- **Edit Info** (button)
-  - Opens side panel or modal:
-    - Editable:
-      - Name
-      - Area/pincode
-      - Travel radius
-      - Languages
-    - Non-editable by default:
-      - Blood group (change requires admin)
-- **Pause participation** (toggle)
-  - `I need a break` → sets status to `INACTIVE`, reduces outreach
-  - Reason dropdown: `Health`, `Travel`, `Busy`, `Other`
-
-**Backend Dependencies**
-
-- `GET /donor/{id}`
-- `PATCH /donor/{id}` for updates
-- `PATCH /donor/{id}/status` to pause/activate
+`GET /api/v1/pods/123/recommended-backups?limit=3&only_eligible=true`
 
 ***
 
-## 3. Upcoming Donation Panel
+## Request Context & Inputs (Server-Side)
 
-**Title**: `Your Next Opportunity`
+The client does not send a body. The server uses existing data:
 
-### Display Logic
+- **Pod context**:
+  - `pod_id`
+  - `patient_id`
+  - `patient_blood_group`
+  - `treatment_center_location`
+  - `cycle_day_pattern`
+  - `current_pod_size`
+  - `pod_health_score`
 
-- If donor is **eligible** and assigned to a pod with an upcoming cycle:
-  - Show:
-    - `Next cycle: 14 June 2026`
-    - `Patient location: [Center Name, Hyderabad]`
-    - `Time window: 9:00–12:00`
-    - Status chip:
-      - `REQUESTED` (system has invited donor)
-      - `CONFIRMED` (donor has accepted)
-      - `DECLINED` (they declined)
-- If donor is **on cooldown**:
-  - Show:
-    - `You’re on a short break until [eligible_from_date].`
-    - `We’ll reach out after this date.`
-- If donor has no assigned pod:
-  - Show:
-    - `We’re matching you to a fighter in Hyderabad.`
-    - `You’ll be notified as soon as your Blood Bridge pod is ready.`
-
-### Actions
-
-- **Confirm participation** (`I can donate this cycle`)
-  - Confirms for the next upcoming cycle.
-  - Backend: `POST /donor/{id}/confirm-cycle` with `cycle_id`.
-- **Can’t come this time** (`I can’t make it`)
-  - Declines, triggers auto-escalation to next donor in pod.
-  - Prompt for reason (optional): `Health`, `Travel`, `Work`, `Other`.
-  - Backend: `POST /donor/{id}/decline-cycle`.
-- **Request another time** (`Suggest another day/time`)
-  - Opens small form:
-    - Alternative day/time within allowed window.
-  - Backend: `POST /donor/{id}/reschedule-suggestion`.
+- **Candidate donors** (from DB):
+  - Filtered by blood group compatibility and city = Hyderabad.
+  - Exclude current pod members if `exclude_existing_pod_members` is true.
 
 ***
 
-## 4. Blood Bridge Pod Panel
+## Server-Side Processing Steps
 
-**Title**: `Your Blood Bridge Pod`
+1. **Fetch pod and patient context**
+   - `SELECT * FROM pods WHERE pod_id = :pod_id`
+   - Load:
+     - `patient_blood_group`, `center_location`, `cycle_day_pattern`, `pod_health_score`, etc.
 
-### Display Elements
+2. **Select candidate donors**
+   - Filter donors by:
+     - City = Hyderabad
+     - Compatible `blood_group`
+     - Status = `ACTIVE` (or similar business rule)
+   - Additional filters:
+     - Exclude donors already in this pod (if `exclude_existing_pod_members`).
 
-- Patient context (anonymized):
-  - `You are part of a support circle for a fighter at [Center Name], Hyderabad.`
-  - `Cycles: about every [X] weeks.`
-- Pod members summary (no full names; privacy-safe):
-  - `You + 7 other donors`
-  - Small chips: `Donor A`, `Donor B`, `Donor C`, etc. with `Active`/`Sleeping` icons.
-- Pod health indicator:
-  - Simple label: `Pod Status: Strong / Stable / Needs You`
-  - Derived from pod health score, but simplified.
+3. **Optional AI filters**
 
-### Actions
+   - If `only_eligible = true`:
+     - For each candidate donor, call `/api/v1/donors/eligibility-status`.
+     - Keep only donors where `eligibility_prediction = "eligible"`.
 
-- **View details (optional)**:
-  - Expanded view shows:
-    - Approximate cycle pattern (e.g., “Every 3rd Tuesday”)
-    - How many donors are currently active vs sleeping
-- No ability to see exact other donors’ personal data — only status and count.
+   - For each remaining candidate donor:
+     - Call `/api/v1/donors/active-status` to get `active_probability`.
 
-**Backend**
+4. **Compute `match_score`**
 
-- `GET /donor/{id}/pod`
-  - returns:
-    - `pod_id`
-    - `center`
-    - `cycle_pattern`
-    - `pod_size`
-    - `active_donor_count`
-    - `pod_status_label`
+   For each candidate donor, compute a score combining:
 
-***
+   - **Base matching** (rule-based):
+     - Blood group compatibility
+     - Distance between donor and center
+     - Availability overlap (preferred days/times vs cycle pattern)
+     - Pod need (pods with low health / low donor count get higher weight)
 
-## 5. Impact & History Panel
+   - **AI signals** (if used):
+     - Active Status probability
+     - Eligibility Status probability
 
-**Title**: `Your Impact`
+   Example conceptual formula:
 
-### Info to Show
+   \[
+   match\_score = w_1 \cdot base\_match\_score + w_2 \cdot active\_prob + w_3 \cdot eligibility\_prob
+   \]
 
-- Counters:
-  - `Total donations: 7`
-  - `Total cycles supported: 5`
-  - `Emergencies responded: 2`
-- Recent history timeline:
-  - Entries like:
-    - `12 May 2026 – Donated at [Center Name] – Supported Cycle 3`
-    - `20 March 2026 – Emergency donation – Hyderabad`
-- Optional: simple badge/rank
-  - `Status: Blood Warrior (Level 2)`
+5. **Generate human-readable `reason`**
 
-### Actions
+   For each donor, build a short explanation string, e.g.:
 
-- **Download acknowledgement** (if Blood Warriors issues certificates)
-  - `Download certificate for last donation` → PDF.
+   - `"High reliability score and optimal distance"`
+   - `"Very close proximity despite lower donation frequency"`
+   - `"Strong past response rate for this bridge and eligible this week"`
 
-**Backend**
+6. **Sort and limit**
 
-- `GET /donor/{id}/impact`
-  - `total_donations`
-  - `cycles_supported`
-  - `emergencies`
-  - `history[]` with `date`, `center`, `type`.
+   - Sort donors by `match_score` descending.
+   - Take top `limit` donors.
+   - Map them into the response format.
 
 ***
 
-## 6. Preferences & Settings
+## Response Format
 
-**Title**: `Your Preferences`
+### Status codes
 
-### Sections
+- `200 OK` – Successful response with recommendations.
+- `404 Not Found` – Pod not found.
+- `500 Internal Server Error` – Unexpected error.
 
-1. **Contact Preferences**
-   - Checkboxes/toggles:
-     - `WhatsApp` (default on)
-     - `SMS`
-     - `Phone call`
-     - `Email` (if available)
-   - Backend: `PATCH /donor/{id}/preferences/contact`.
+### Body (JSON)
 
-2. **Availability Settings**
-   - Day chips:
-     - `Mon … Sun`
-   - Time slots:
-     - `Morning (6–12)`, `Afternoon (12–5)`, `Evening (5–9)`
-   - Travel radius slider:
-     - `0–5 km`, `5–10 km`, `10–20 km`, `City-wide`
-   - Backend: `PATCH /donor/{id}/preferences/availability`.
+```json
+{
+  "pod_id": 123,
+  "recommended_backups": [
+    {
+      "donor_id": 105,
+      "match_score": 0.95,
+      "reason": "High reliability score and optimal distance"
+    },
+    {
+      "donor_id": 210,
+      "match_score": 0.82,
+      "reason": "Very close proximity despite lower donation frequency"
+    }
+  ],
+  "generated_at": "2026-06-07T00:35:00Z",
+  "model_versions": {
+    "active_status_model": "active_status_model_v1",
+    "eligibility_status_model": "eligibility_status_model_v1"
+  }
+}
+```
 
-3. **Language & UI**
-   - `Preferred language`: `English`, `Telugu`, `Hindi` (multi-select possible).
-   - This informs WhatsApp bot / SMS language.
-   - Backend: `PATCH /donor/{id}/preferences/language`.
+- `pod_id`  
+  The pod for which recommendations were generated.
 
-4. **Health / Medical Notes (optional)**
-   - Safe text input where donor can add:
-     - `Doctor advised max X donations per year`, etc.
-   - Flag: `requires_admin_review` if changed.
-   - Backend: `PATCH /donor/{id}/notes`.
+- `recommended_backups[]`  
+  - `donor_id` – numeric or string ID of the donor.
+  - `match_score` – float between 0 and 1 (or 0–100, but be consistent).
+  - `reason` – brief text explaining why this donor is recommended.
 
-***
+- `generated_at`  
+  ISO timestamp of when this list was produced.
 
-## 7. Footer / Help & Support
-
-- **FAQ link**: “What if I can’t donate one cycle?” → static page or modal.
-- **Urgent contact**: Button/link to Blood Warriors support number / WhatsApp.
-- Legal/consent links: `Privacy`, `Terms`.
-
-***
-
-## UX Rules & Edge Cases
-
-1. **Cooldown state**
-   - If donor is on cooldown:
-     - Disable `Confirm` buttons.
-     - Show: `You’re temporarily on hold until [date] for your safety.`
-   - Backend ensures no cycle confirmation is accepted during this window.
-
-2. **Inactive state**
-   - If status = `INACTIVE`:
-     - Show banner: `You are currently paused.`
-     - Only actions:
-       - `Resume participation`
-       - Edit profile
-   - No cycle invites are shown.
-
-3. **Unassigned donor**
-   - If donor not yet in a pod:
-     - Hide pod panel; show “We’re matching you” message.
-     - Impact panel still shows previous donations if any.
-
-4. **Multiple pods (rare)**
-   - If donor is primary in one pod and backup in another:
-     - Upcoming section shows the **primary pod’s next cycle** first.
-     - Secondary commitments can appear in “Other opportunities”.
+- `model_versions` (optional but useful for audit)  
+  Shows which model versions were used, if AI models are involved.
 
 ***
 
-## API Summary (for devs)
+## Usage in the PulseNet App
 
-- `GET /donor/{id}` → summary header
-- `PATCH /donor/{id}` → update basic info
-- `PATCH /donor/{id}/status` → active/inactive/cooldown
-- `GET /donor/{id}/next-cycle` → upcoming donation info
-- `POST /donor/{id}/confirm-cycle` → confirm
-- `POST /donor/{id}/decline-cycle` → decline
-- `POST /donor/{id}/reschedule-suggestion` → suggest alt time
-- `GET /donor/{id}/pod` → pod info
-- `GET /donor/{id}/impact` → impact stats & history
-- `PATCH /donor/{id}/preferences/contact`
-- `PATCH /donor/{id}/preferences/availability`
-- `PATCH /donor/{id}/preferences/language`
-- `PATCH /donor/{id}/notes`
+### Admin UI
+
+- In the **Pod Command Center**, for a weak pod:
+  - Show a button: `Suggest backup donors`.
+  - Call this endpoint.
+  - Render the `recommended_backups` as a list with:
+    - Donor ID / basic info (from another API).
+    - `match_score` as a percentage.
+    - `reason` as a subtitle.
+
+- Action:
+  - Admin can click `Add to pod` next to each recommended donor.
+  - That triggers a separate endpoint:
+    - `POST /api/v1/pods/{pod_id}/add-donor` with `{ donor_id, role: "backup" }`.
+
+### Logging / Analytics
+
+- Each time this endpoint is called, log:
+  - `pod_id`
+  - number of candidates considered
+  - number of recommendations returned
+
+This helps you evaluate how well the recommendation pipeline is performing.
 
 ***
 
-If you want, I can also turn this into a quick **wireframe sketch description** (section-wise layout) or a JSON UI schema that your React agent can consume directly.
+## Notes for Implementation
+
+- Implement this controller in the same service that already exposes:
+  - `/api/v1/donors/active-status`
+  - `/api/v1/donors/eligibility-status`
+- Reuse existing:
+  - donor selection logic (blood group + city),
+  - distance calculations,
+  - and feature engineering utilities.
+
+***
+
+Save this as something like:
+
+`docs/api/backup_donor_recommendations.md`
+
+and link it from your main PulseNet API index so the agents and jury see clearly how backup suggestions are generated and exposed.
