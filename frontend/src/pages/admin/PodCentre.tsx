@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { GitBranch, Zap, AlertTriangle, CheckCircle, RefreshCw, Users, X } from 'lucide-react'
+import { GitBranch, Zap, AlertTriangle, CheckCircle, RefreshCw, Users, X, MessageCircle } from 'lucide-react'
 import { api } from '@/lib/api'
 
 type Pod = {
@@ -172,6 +172,14 @@ export function PodCentre() {
     }
   })
 
+  const notifyBackupMutation = useMutation({
+    mutationFn: (donorId: number) => api.post(`/api/admin/notify/${donorId}/whatsapp`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pods'] })
+    },
+    onError: () => alert('Failed to send WhatsApp reminder'),
+  })
+
   const filtered = pods?.filter(p => filterStatus === 'all' || p.status === filterStatus) ?? []
 
   return (
@@ -320,6 +328,27 @@ export function PodCentre() {
                       </div>
                       <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
                     </div>
+                    <button 
+                      onClick={async () => {
+                        await addBackupMutation.mutateAsync({ pod_id: selectedBridgeId!, donor_id: rec.donor_id });
+                        await notifyBackupMutation.mutateAsync(rec.donor_id);
+                        setSelectedBridgeId(null);
+                      }}
+                      disabled={addBackupMutation.isPending || notifyBackupMutation.isPending}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '6px 14px',
+                        background: 'rgba(34,197,94,0.15)',
+                        border: '1px solid rgba(34,197,94,0.3)',
+                        borderRadius: 10,
+                        color: '#4ade80',
+                        fontSize: 13, fontWeight: 600,
+                        cursor: (addBackupMutation.isPending || notifyBackupMutation.isPending) ? 'not-allowed' : 'pointer',
+                        opacity: (addBackupMutation.isPending || notifyBackupMutation.isPending) ? 0.7 : 1,
+                        transition: 'all 0.2s'
+                    }}>
+                      <MessageCircle size={14} /> WhatsApp
+                    </button>
                   </div>
                 ))}
               </div>

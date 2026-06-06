@@ -108,7 +108,15 @@ function DetailView({ cycle, onFindBackups }: { cycle: CycleCard, onFindBackups:
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
-            {bridge.slots.filter((s: any) => s.donor_id).map((slot: any) => (
+            {bridge.slots
+              .filter((s: any) => s.donor_id && (!s.is_backup || s.requirement_status === 'confirmed' || s.requirement_status === 'waitlisted'))
+              .sort((a: any, b: any) => {
+                if (a.is_backup !== b.is_backup) {
+                  return a.is_backup ? 1 : -1;
+                }
+                return a.cycle_position - b.cycle_position;
+              })
+              .map((slot: any) => (
               <div key={slot.slot_id} style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
@@ -235,6 +243,14 @@ export function CycleReadiness() {
       qc.invalidateQueries({ queryKey: ['upcoming-cycles', days] })
       qc.invalidateQueries({ queryKey: ['recommendedBackups', selectedBridgeIdForBackups] })
     }
+  })
+
+  const notifyBackupMutation = useMutation({
+    mutationFn: (donorId: number) => api.post(`/api/admin/notify/${donorId}/whatsapp`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upcoming-cycles', days] })
+    },
+    onError: () => alert('Failed to send WhatsApp reminder'),
   })
 
   // Auto-select first cycle on load
@@ -465,18 +481,25 @@ export function CycleReadiness() {
                       <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
                     </div>
                     <button 
-                      onClick={() => {
-                        addBackupMutation.mutate({ pod_id: selectedBridgeIdForBackups!, donor_id: rec.donor_id });
+                      onClick={async () => {
+                        await addBackupMutation.mutateAsync({ pod_id: selectedBridgeIdForBackups!, donor_id: rec.donor_id });
+                        await notifyBackupMutation.mutateAsync(rec.donor_id);
                         setSelectedBridgeIdForBackups(null);
                       }}
-                      disabled={addBackupMutation.isPending}
+                      disabled={addBackupMutation.isPending || notifyBackupMutation.isPending}
                       style={{
-                      padding: '6px 12px', background: '#f1f5f9', color: '#0f172a',
-                      borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', 
-                      cursor: addBackupMutation.isPending ? 'not-allowed' : 'pointer',
-                      opacity: addBackupMutation.isPending ? 0.7 : 1
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '6px 14px',
+                        background: 'rgba(34,197,94,0.15)',
+                        border: '1px solid rgba(34,197,94,0.3)',
+                        borderRadius: 10,
+                        color: '#4ade80',
+                        fontSize: 13, fontWeight: 600,
+                        cursor: (addBackupMutation.isPending || notifyBackupMutation.isPending) ? 'not-allowed' : 'pointer',
+                        opacity: (addBackupMutation.isPending || notifyBackupMutation.isPending) ? 0.7 : 1,
+                        transition: 'all 0.2s'
                     }}>
-                      Add
+                      <MessageCircle size={14} /> WhatsApp
                     </button>
                   </div>
                 ))}
