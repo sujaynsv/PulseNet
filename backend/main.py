@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from database import engine
 from models import Base
-from routers import admin, auth_router, donor, patient
+from routers import admin, auth_router, donor, patient, seed
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
 logger = logging.getLogger("pulsenet")
@@ -57,6 +57,7 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router.router,    prefix="/api/auth",    tags=["Auth"])
 app.include_router(admin.router,          prefix="/api/admin",   tags=["Admin"])
+app.include_router(seed.router,           prefix="/api/admin",   tags=["Admin Seed"])
 app.include_router(donor.router,          prefix="/api/donor",   tags=["Donor"])
 app.include_router(patient.router,        prefix="/api/patient", tags=["Patient"])
 
