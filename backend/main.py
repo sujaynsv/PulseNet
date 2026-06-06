@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from database import engine
 from models import Base
-from routers import admin, auth_router, donor, patient, seed
+from routers import admin, auth_router, donor, patient, seed, webhooks
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
 logger = logging.getLogger("pulsenet")
@@ -60,7 +60,7 @@ app.include_router(admin.router,          prefix="/api/admin",   tags=["Admin"])
 app.include_router(seed.router,           prefix="/api/admin",   tags=["Admin Seed"])
 app.include_router(donor.router,          prefix="/api/donor",   tags=["Donor"])
 app.include_router(patient.router,        prefix="/api/patient", tags=["Patient"])
-
+app.include_router(webhooks.router,       prefix="/api/webhooks",tags=["Webhooks"])
 
 # ── Health endpoints ──────────────────────────────────────────────────────────
 @app.get("/api/health", tags=["Health"])

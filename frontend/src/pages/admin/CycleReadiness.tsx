@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, ChevronDown, ChevronUp, Phone, User as UserIcon } from 'lucide-react'
 import { api } from '@/lib/api'
 
@@ -45,9 +45,14 @@ function CycleCardView({ card }: { card: CycleCard }) {
     enabled: expanded,
   })
 
+  const queryClient = useQueryClient()
+
   const notifyMutation = useMutation({
     mutationFn: (donorId: number) => api.post(`/api/admin/notify/${donorId}/whatsapp`),
-    onSuccess: (data) => alert(data.data.message),
+    onSuccess: () => {
+      // Refresh the bridge data so the badge turns yellow (Waitlist)
+      queryClient.invalidateQueries({ queryKey: ['bridge', card.patient_id] })
+    },
     onError: () => alert('Failed to send WhatsApp reminder'),
   })
 
@@ -151,21 +156,38 @@ function CycleCardView({ card }: { card: CycleCard }) {
                   </div>
                   
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: slot.slot_status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: slot.slot_status === 'Active' ? '#22c55e' : '#f59e0b' }}>
-                      {slot.slot_status}
-                    </span>
+                    {slot.requirement_status === 'confirmed' ? (
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(34,197,94,0.15)', color: '#4ade80', fontWeight: 600, border: '1px solid rgba(74,222,128,0.3)' }}>
+                        ✓ Confirmed
+                      </span>
+                    ) : slot.requirement_status === 'declined' ? (
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(239,68,68,0.15)', color: '#f87171', fontWeight: 600, border: '1px solid rgba(248,113,113,0.3)' }}>
+                        ✗ Declined
+                      </span>
+                    ) : slot.requirement_status === 'pending' ? (
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(234,179,8,0.15)', color: '#facc15', fontWeight: 600, border: '1px solid rgba(250,204,21,0.3)' }}>
+                        Waitlist
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: slot.slot_status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: slot.slot_status === 'Active' ? '#22c55e' : '#f59e0b' }}>
+                        {slot.slot_status}
+                      </span>
+                    )}
                     
                     <button
-                      disabled={notifyMutation.isPending}
+                      disabled={notifyMutation.isPending || slot.requirement_status === 'confirmed'}
                       onClick={() => notifyMutation.mutate(slot.donor_id)}
                       style={{
-                        background: '#25D366', color: '#fff', border: 'none',
+                        background: slot.requirement_status === 'confirmed' ? 'rgba(255,255,255,0.1)' : '#25D366', 
+                        color: slot.requirement_status === 'confirmed' ? 'var(--clr-muted)' : '#fff', 
+                        border: 'none',
                         padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                        display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6, 
+                        cursor: slot.requirement_status === 'confirmed' ? 'not-allowed' : 'pointer',
                         opacity: notifyMutation.isPending ? 0.6 : 1
                       }}
                     >
-                      <MessageCircle size={14} /> WhatsApp
+                      <MessageCircle size={14} /> {slot.requirement_status === 'confirmed' ? 'Sent' : 'WhatsApp'}
                     </button>
                   </div>
                 </div>

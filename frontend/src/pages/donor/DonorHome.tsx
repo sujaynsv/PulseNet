@@ -216,6 +216,8 @@ export function DonorHome() {
   // Determine if onboarding is required (check critical fields)
   const needsOnboarding = !profile?.blood_group || !profile?.locality || !profile?.contact_preference;
 
+  const scheduledRequirement = requirements.find(r => r.my_response_status === 'confirmed');
+
   // Cooldown calculation
   const isCooldown = profile?.eligibility_status === 'not eligible';
   let cooldownDaysLeft = 0;
@@ -511,6 +513,19 @@ export function DonorHome() {
                   <div className="score-bar-fill" style={{ width: `${cooldownPercent}%` }} />
                 </div>
                 <div className="text-right text-[10px] text-slate-500 font-mono">Recovery Progress: {cooldownPercent}%</div>
+              </div>
+            </div>
+          ) : scheduledRequirement ? (
+            <div className="space-y-4 py-4">
+              <div className="w-16 h-16 bg-blue-950/40 border border-blue-500/30 rounded-full flex items-center justify-center mx-auto mb-2 shadow-[0_0_15px_rgba(59,130,246,0.3)]">
+                <Calendar className="w-8 h-8 text-blue-400" />
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold tracking-wider py-1 px-2.5 rounded-full bg-blue-950/30 text-blue-400 border border-blue-900/50">Donation Scheduled</span>
+                <h3 className="text-2xl font-bold mt-2 text-white">Upcoming Donation</h3>
+                <p className="text-sm text-slate-400 max-w-md mx-auto mt-2 leading-relaxed">
+                  You are scheduled to donate at <strong>{scheduledRequirement.center_name}</strong> on <strong>{new Date(scheduledRequirement.date_needed).toLocaleDateString()}</strong> for patient <strong>{scheduledRequirement.patient_name || 'Anonymous'}</strong>.
+                </p>
               </div>
             </div>
           ) : (

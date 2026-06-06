@@ -29,6 +29,8 @@ import logging
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
+from typing import Any, Optional, List
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -38,7 +40,7 @@ from sqlalchemy.orm import selectinload
 
 from auth import AdminUser
 from database import get_db
-from models import Bridge, BridgeMember, Cycle, EmergencyCase, TransfusionLog, User
+from models import Bridge, BridgeMember, Cycle, EmergencyCase, RequirementResponse, TransfusionLog, User
 from services.notification import build_donor_reminder_message, send_sms_reminder
 
 logger = logging.getLogger(__name__)
@@ -174,6 +176,7 @@ class DonorSlot(BaseModel):
     expected_next_donation_date: Optional[date]
     slot_status: str
     donated_earlier: bool
+    requirement_status: Optional[str] = None
 
 
 class BridgePanelResponse(BaseModel):
@@ -892,6 +895,19 @@ async def get_bridge_panel(
     )
     bridge = bridge_result.scalar_one_or_none()
 
+    latest_responses = {}
+    if bridge:
+        donor_ids = [m.donor_id for m in bridge.members if m.donor_id]
+        if donor_ids:
+            responses_result = await db.execute(
+                select(RequirementResponse.donor_id, RequirementResponse.status)
+                .where(RequirementResponse.donor_id.in_(donor_ids))
+                .order_by(RequirementResponse.created_at.desc())
+            )
+            for row in responses_result.all():
+                if row.donor_id not in latest_responses:
+                    latest_responses[row.donor_id] = row.status
+
     slots: list[DonorSlot] = []
     if bridge:
         for member in bridge.members:
@@ -921,6 +937,7 @@ async def get_bridge_panel(
                 expected_next_donation_date=member.expected_next_donation_date,
                 slot_status=slot_status,
                 donated_earlier=member.donated_earlier,
+                requirement_status=latest_responses.get(donor.id) if donor else None
             ))
 
     return BridgePanelResponse(
@@ -1009,16 +1026,86 @@ async def send_donor_whatsapp_reminder(
         else "soon"
     )
 
-    message = f"Hi {donor.name}, you're requested to donate blood for {patient_name} on {due_date}. Please reply '1' to confirm YES, or '2' for NO."
+    message_body = f"Hi {donor.name}, you're requested to donate blood for {patient_name} on {due_date}. Please reply '1' to confirm YES, or '2' for NO."
 
-    logger.info("WhatsApp Reminder triggered for %s: %s", donor.phone, message)
+    # --- Create RequirementResponse so UI tracks the pending status ---
+    from models import Requirement, RequirementResponse
+    import uuid
+    
+    req_result = await db.execute(
+        select(Requirement)
+        .where(Requirement.patient_id == member.bridge.patient_id)
+        .order_by(Requirement.created_at.desc())
+        .limit(1)
+    )
+    req = req_result.scalar_one_or_none()
+
+    if not req:
+        req = Requirement(
+            external_requirement_id=f"REQ-{uuid.uuid4().hex[:8]}",
+            patient_id=member.bridge.patient_id,
+            trigger_type="system",
+            status="matching"
+        )
+        db.add(req)
+        await db.flush()
+
+    existing_rr = await db.execute(
+        select(RequirementResponse)
+        .where(RequirementResponse.requirement_id == req.id)
+        .where(RequirementResponse.donor_id == donor.id)
+    )
+    rr = existing_rr.scalar_one_or_none()
+    if not rr:
+        rr = RequirementResponse(
+            requirement_id=req.id,
+            donor_id=donor.id,
+            status="pending"
+        )
+        db.add(rr)
+    else:
+        rr.status = "pending"
+    
+    await db.commit()
+    # ----------------------------------------------------------------
+
+    from config import settings
+    from twilio.rest import Client
+
+    if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+        raise HTTPException(status_code=500, detail="Twilio credentials are not configured on the server.")
+
+    try:
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        to_number = donor.phone
+        if not to_number.startswith("+"):
+            # Assume it needs a plus if it's purely digits (usually US numbers)
+            to_number = f"+{to_number}"
+
+        import json
+        content_vars = json.dumps({
+            "1": donor.name,
+            "2": patient_name,
+            "3": due_date
+        })
+
+        tw_msg = client.messages.create(
+            from_=settings.TWILIO_WHATSAPP_FROM,
+            content_sid="HX7416ef53111eedb4b2a3def8414ab476",
+            content_variables=content_vars,
+            to=f"whatsapp:{to_number}"
+        )
+        logger.info("WhatsApp Reminder sent to %s. SID: %s", to_number, tw_msg.sid)
+    except Exception as e:
+        logger.error("Twilio WhatsApp failed for %s: %s", donor.phone, e)
+        raise HTTPException(status_code=500, detail=f"WhatsApp delivery failed: {str(e)}")
 
     return {
-        "message": "WhatsApp reminder dispatched (Twilio Mock)",
+        "message": "WhatsApp reminder dispatched",
         "donor": donor.name,
         "phone": donor.phone,
         "platform": "whatsapp",
-        "demo": True,
+        "demo": False,
     }
 
 
