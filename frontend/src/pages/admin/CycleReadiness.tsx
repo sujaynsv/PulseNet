@@ -1,12 +1,7 @@
-/**
- * PulseNet — 7-Day Cycle Readiness
- * All transfusion cycles due in the next N days
- * Sorted by confidence (most at-risk first)
- */
-
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, ChevronDown, ChevronUp, Phone, User as UserIcon } from 'lucide-react'
+import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, Phone, User as UserIcon, Activity } from 'lucide-react'
+import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { api } from '@/lib/api'
 
 type CycleCard = {
@@ -24,197 +19,220 @@ type CycleCard = {
 const fetchCycles = (days: number) =>
   api.get(`/api/admin/cycles/upcoming?days=${days}`).then(r => r.data as CycleCard[])
 
+const fetchBridge = (patientId: number) =>
+  api.get(`/api/admin/bridge/${patientId}`).then(r => r.data)
+
 const STATE_CFG = {
   covered:  { color: '#22c55e', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.2)',  icon: <CheckCircle size={14} />, label: 'Covered' },
   at_risk:  { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.2)', icon: <AlertTriangle size={14} />, label: 'At Risk' },
   critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.2)',  icon: <Zap size={14} />, label: 'Critical' },
 }
 
-const fetchBridge = (patientId: number) =>
-  api.get(`/api/admin/bridge/${patientId}`).then(r => r.data)
-
-function CycleCardView({ card }: { card: CycleCard }) {
-  const [expanded, setExpanded] = useState(false)
-  const cfg = STATE_CFG[card.state]
-  const isToday = card.days_until === 0
-  const isTomorrow = card.days_until === 1
-
+function DetailView({ cycle }: { cycle: CycleCard }) {
+  const cfg = STATE_CFG[cycle.state]
   const { data: bridge, isLoading: isLoadingBridge } = useQuery({
-    queryKey: ['bridge', card.patient_id],
-    queryFn: () => fetchBridge(card.patient_id),
-    enabled: expanded,
+    queryKey: ['bridge', cycle.patient_id],
+    queryFn: () => fetchBridge(cycle.patient_id),
   })
 
   const queryClient = useQueryClient()
-
   const notifyMutation = useMutation({
     mutationFn: (donorId: number) => api.post(`/api/admin/notify/${donorId}/whatsapp`),
     onSuccess: () => {
-      // Refresh the bridge data so the badge turns yellow (Waitlist)
-      queryClient.invalidateQueries({ queryKey: ['bridge', card.patient_id] })
+      queryClient.invalidateQueries({ queryKey: ['bridge', cycle.patient_id] })
     },
     onError: () => alert('Failed to send WhatsApp reminder'),
   })
 
   return (
-    <div style={{
-      background: 'rgba(255,255,255,0.03)',
-      border: `1px solid ${cfg.border}`,
-      borderRadius: 12,
-      padding: '18px 22px',
-      position: 'relative',
-      overflow: 'hidden',
-    }}>
-      {/* Ambient glow for critical */}
-      {card.state === 'critical' && (
-        <div style={{ position: 'absolute', inset: 0, boxShadow: 'inset 0 0 30px rgba(239,68,68,0.06)', pointerEvents: 'none' }} />
-      )}
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* Detail Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontWeight: 700, fontSize: 15, color: '#f1f5f9' }}>{card.patient_name || `Patient #${card.patient_id}`}</span>
-            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(192,25,44,0.15)', color: '#C0191C', fontWeight: 600 }}>
-              {card.blood_group || '?'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <h2 style={{ fontSize: 24, fontWeight: 700, color: '#f8fafc', margin: 0 }}>
+              {cycle.patient_name || `Patient #${cycle.patient_id}`}
+            </h2>
+            <span style={{ fontSize: 13, padding: '4px 10px', borderRadius: 16, background: 'rgba(192,25,44,0.15)', color: '#C0191C', fontWeight: 700 }}>
+              {cycle.blood_group || '?'}
             </span>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--clr-muted)' }}>
-            Due: <strong style={{ color: '#f1f5f9' }}>{new Date(card.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</strong>
-            {' '}·{' '}
-            <span style={{ color: card.days_until <= 1 ? '#ef4444' : card.days_until <= 3 ? '#f59e0b' : 'inherit' }}>
-              {isToday ? 'TODAY' : isTomorrow ? 'Tomorrow' : `${card.days_until}d away`}
-            </span>
+          <div style={{ fontSize: 13, color: 'var(--clr-muted)', display: 'flex', gap: 16 }}>
+            <span>Due: <strong style={{ color: '#e2e8f0' }}>{new Date(cycle.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</strong></span>
+            <span>ID: <strong style={{ color: '#e2e8f0' }}>#{cycle.patient_id}</strong></span>
           </div>
         </div>
-
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '5px 12px', borderRadius: 20,
-          background: cfg.bg, border: `1px solid ${cfg.border}`,
-          color: cfg.color, fontSize: 11, fontWeight: 600,
-        }}>
+        <div style={{ padding: '6px 14px', borderRadius: 20, background: cfg.bg, color: cfg.color, fontSize: 12, fontWeight: 700, border: `1px solid ${cfg.border}`, display: 'flex', alignItems: 'center', gap: 6 }}>
           {cfg.icon} {cfg.label}
         </div>
       </div>
 
-      {/* Metrics row */}
-      <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginBottom: expanded ? 16 : 0 }}>
-        {/* Confidence gauge */}
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-            <span style={{ fontSize: 11, color: 'var(--clr-muted)' }}>Confidence</span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: cfg.color, fontFamily: 'monospace' }}>{card.confidence_score}%</span>
+      {/* Visual Progress Metrics */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ background: 'rgba(0,0,0,0.2)', padding: 16, borderRadius: 12, border: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ fontSize: 12, color: 'var(--clr-muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Activity size={14} /> Confidence Score
           </div>
-          <div style={{ height: 5, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${card.confidence_score}%`, background: cfg.color, borderRadius: 3, transition: 'width 0.5s' }} />
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: cfg.color, lineHeight: 1 }}>{cycle.confidence_score}%</span>
+          </div>
+          <div style={{ height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, marginTop: 12, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${cycle.confidence_score}%`, background: cfg.color, borderRadius: 3, transition: 'width 0.5s' }} />
           </div>
         </div>
 
-        {/* Units */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--clr-muted)' }}>
-          <Droplets size={14} style={{ color: '#C0191C' }} />
-          <span><strong style={{ color: '#f1f5f9' }}>{card.expected_units}</strong> units</span>
+        <div style={{ background: 'rgba(0,0,0,0.2)', padding: 16, borderRadius: 12, border: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ fontSize: 12, color: 'var(--clr-muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Droplets size={14} style={{ color: '#38bdf8' }} /> Units Expected
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: '#f8fafc', lineHeight: 1 }}>{cycle.expected_units}</span>
+            <span style={{ fontSize: 12, color: 'var(--clr-muted)', marginBottom: 4 }}>units needed</span>
+          </div>
+          <div style={{ height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, marginTop: 12, overflow: 'hidden' }}>
+             <div style={{ height: '100%', width: '100%', background: '#38bdf8', borderRadius: 3 }} />
+          </div>
         </div>
-        
-        <button 
-          onClick={() => setExpanded(!expanded)}
-          style={{ background: 'transparent', border: 'none', color: 'var(--clr-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-        >
-          {expanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-        </button>
       </div>
 
-      {/* Expanded Bridge Details */}
-      {expanded && (
-        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16, marginTop: 16 }}>
-          <h4 style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Blood Bridge Team
-          </h4>
-          
-          {isLoadingBridge ? (
-            <div style={{ fontSize: 12, color: 'var(--clr-muted)' }}>Loading donors...</div>
-          ) : !bridge || bridge.slots.filter((s: any) => s.donor_id).length === 0 ? (
-            <div style={{ fontSize: 12, color: '#f59e0b' }}>No donors mapped to this bridge yet.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {bridge.slots.filter((s: any) => s.donor_id).map((slot: any) => (
-                <div key={slot.slot_id} style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-                  padding: '10px 14px', borderRadius: 8
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ background: 'rgba(0,0,0,0.3)', width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <UserIcon size={14} color="var(--clr-muted)" />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>{slot.donor_name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--clr-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Phone size={10} /> {slot.donor_phone || 'N/A'}
-                      </div>
-                    </div>
+      {/* Blood Bridge Team Grid */}
+      <div>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--clr-muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Blood Bridge Team
+        </h3>
+        {isLoadingBridge ? (
+          <div className="skeleton" style={{ height: 100, borderRadius: 12 }} />
+        ) : !bridge || bridge.slots.filter((s: any) => s.donor_id).length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: 12, color: '#94a3b8' }}>
+            No donors mapped to this bridge.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {bridge.slots.filter((s: any) => s.donor_id).map((slot: any) => (
+              <div key={slot.slot_id} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                padding: '12px 16px', borderRadius: 10
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ background: 'rgba(0,0,0,0.3)', width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <UserIcon size={16} color="var(--clr-muted)" />
                   </div>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    {slot.requirement_status === 'confirmed' ? (
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(34,197,94,0.15)', color: '#4ade80', fontWeight: 600, border: '1px solid rgba(74,222,128,0.3)' }}>
-                        ✓ Confirmed
-                      </span>
-                    ) : slot.requirement_status === 'declined' ? (
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(239,68,68,0.15)', color: '#f87171', fontWeight: 600, border: '1px solid rgba(248,113,113,0.3)' }}>
-                        ✗ Declined
-                      </span>
-                    ) : slot.requirement_status === 'pending' ? (
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(234,179,8,0.15)', color: '#facc15', fontWeight: 600, border: '1px solid rgba(250,204,21,0.3)' }}>
-                        Waitlist
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: slot.slot_status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: slot.slot_status === 'Active' ? '#22c55e' : '#f59e0b' }}>
-                        {slot.slot_status}
-                      </span>
-                    )}
-                    
-                    <button
-                      disabled={notifyMutation.isPending || slot.requirement_status === 'confirmed'}
-                      onClick={() => notifyMutation.mutate(slot.donor_id)}
-                      style={{
-                        background: slot.requirement_status === 'confirmed' ? 'rgba(255,255,255,0.1)' : '#25D366', 
-                        color: slot.requirement_status === 'confirmed' ? 'var(--clr-muted)' : '#fff', 
-                        border: 'none',
-                        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                        display: 'flex', alignItems: 'center', gap: 6, 
-                        cursor: slot.requirement_status === 'confirmed' ? 'not-allowed' : 'pointer',
-                        opacity: notifyMutation.isPending ? 0.6 : 1
-                      }}
-                    >
-                      <MessageCircle size={14} /> {slot.requirement_status === 'confirmed' ? 'Sent' : 'WhatsApp'}
-                    </button>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#f1f5f9' }}>{slot.donor_name}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Phone size={10} /> {slot.donor_phone || 'N/A'}</span>
+                      {slot.last_donation_date && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12 }}>
+                          <Clock size={10} /> Last: {new Date(slot.last_donation_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      )}
+                      {slot.expected_next_donation_date && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12, color: slot.slot_status === 'Active' ? '#4ade80' : slot.slot_status === 'Due' ? '#facc15' : '#f87171' }}>
+                          <Droplets size={10} /> Due: {new Date(slot.expected_next_donation_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  {slot.requirement_status === 'confirmed' ? (
+                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(34,197,94,0.15)', color: '#4ade80', fontWeight: 600, border: '1px solid rgba(74,222,128,0.3)' }}>
+                      ✓ Confirmed
+                    </span>
+                  ) : slot.requirement_status === 'declined' ? (
+                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.15)', color: '#f87171', fontWeight: 600, border: '1px solid rgba(248,113,113,0.3)' }}>
+                      ✗ Declined
+                    </span>
+                  ) : slot.requirement_status === 'waitlisted' ? (
+                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(234,179,8,0.15)', color: '#facc15', fontWeight: 600, border: '1px solid rgba(250,204,21,0.3)' }}>
+                      Waitlist
+                    </span>
+                  ) : slot.requirement_status === 'pending' ? (
+                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(255,255,255,0.05)', color: '#94a3b8', fontWeight: 600, border: '1px solid rgba(255,255,255,0.1)' }}>
+                      Pending
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: slot.slot_status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: slot.slot_status === 'Active' ? '#22c55e' : '#f59e0b' }}>
+                      {slot.slot_status}
+                    </span>
+                  )}
+                  
+                  <button
+                    disabled={notifyMutation.isPending || slot.requirement_status === 'confirmed' || slot.requirement_status === 'declined' || slot.requirement_status === 'waitlisted'}
+                    onClick={() => notifyMutation.mutate(slot.donor_id)}
+                    style={{
+                      background: slot.requirement_status === 'confirmed' || slot.requirement_status === 'declined' || slot.requirement_status === 'waitlisted' ? 'rgba(255,255,255,0.1)' : '#25D366', 
+                      color: slot.requirement_status === 'confirmed' || slot.requirement_status === 'declined' || slot.requirement_status === 'waitlisted' ? 'var(--clr-muted)' : '#fff', 
+                      border: 'none',
+                      padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                      display: 'flex', alignItems: 'center', gap: 6, 
+                      cursor: slot.requirement_status === 'confirmed' || slot.requirement_status === 'declined' || slot.requirement_status === 'waitlisted' ? 'not-allowed' : 'pointer',
+                      opacity: notifyMutation.isPending ? 0.6 : 1,
+                      transition: 'background 0.2s, opacity 0.2s'
+                    }}
+                  >
+                    <MessageCircle size={16} /> 
+                    {slot.requirement_status === 'pending' ? 'Sent' : 'WhatsApp'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 export function CycleReadiness() {
   const [days, setDays] = useState(7)
-  const { data: cycles, isLoading, isError } = useQuery({
+  const [selectedCycleId, setSelectedCycleId] = useState<number | null>(null)
+
+  const { data: cycles, isLoading } = useQuery({
     queryKey: ['upcoming-cycles', days],
     queryFn: () => fetchCycles(days),
     refetchInterval: 60000,
   })
 
-  const critical = cycles?.filter(c => c.state === 'critical') ?? []
-  const atRisk = cycles?.filter(c => c.state === 'at_risk') ?? []
-  const covered = cycles?.filter(c => c.state === 'covered') ?? []
+  // Auto-select first cycle on load
+  React.useEffect(() => {
+    if (cycles && cycles.length > 0 && selectedCycleId === null) {
+      setSelectedCycleId(cycles[0].cycle_id)
+    }
+  }, [cycles, selectedCycleId])
+
+  const chartData = useMemo(() => {
+    if (!cycles) return []
+    const datesMap: Record<string, any> = {}
+    
+    // Create a date range to ensure blank days are shown
+    const today = new Date()
+    for (let i = 0; i <= days; i++) {
+      const d = new Date(today)
+      d.setDate(today.getDate() + i)
+      const dateStr = d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })
+      datesMap[dateStr] = { name: dateStr, critical: 0, at_risk: 0, covered: 0 }
+    }
+
+    cycles.forEach(c => {
+      const d = new Date(c.due_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })
+      if (datesMap[d]) {
+        datesMap[d][c.state] += 1
+      }
+    })
+    return Object.values(datesMap)
+  }, [cycles, days])
+
+  const selectedCycle = useMemo(() => {
+    return cycles?.find(c => c.cycle_id === selectedCycleId) || null
+  }, [cycles, selectedCycleId])
 
   return (
     <div style={{ maxWidth: 1200 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28, flexWrap: 'wrap', gap: 16 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <div style={{ fontSize: 11, color: '#475569', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
             Command Centre
@@ -228,72 +246,110 @@ export function CycleReadiness() {
           </p>
         </div>
         {/* Day window selector */}
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, background: 'rgba(255,255,255,0.02)', padding: 4, borderRadius: 24 }}>
           {[3, 7, 14].map(d => (
             <button
               key={d}
               onClick={() => setDays(d)}
               style={{
                 padding: '6px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                background: days === d ? 'rgba(167,139,250,0.2)' : 'transparent',
-                border: days === d ? '1px solid rgba(167,139,250,0.4)' : '1px solid rgba(255,255,255,0.1)',
-                color: days === d ? '#a78bfa' : 'var(--clr-muted)',
+                background: days === d ? '#a78bfa' : 'transparent',
+                border: 'none',
+                color: days === d ? '#0f172a' : '#94a3b8',
+                transition: 'all 0.2s'
               }}
             >
-              {d}d
+              {d} Days
             </button>
           ))}
         </div>
       </div>
 
-      {/* Summary tiles */}
-      {!isLoading && cycles && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
-          {[
-            { label: 'Critical', count: critical.length, color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
-            { label: 'At Risk', count: atRisk.length, color: '#f59e0b', bg: 'rgba(245,158,11,0.08)' },
-            { label: 'Covered', count: covered.length, color: '#22c55e', bg: 'rgba(34,197,94,0.08)' },
-          ].map(t => (
-            <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.color}33`, borderRadius: 10, padding: '14px 18px' }}>
-              <div style={{ fontFamily: 'monospace', fontSize: 26, fontWeight: 700, color: t.color }}>{t.count}</div>
-              <div style={{ fontSize: 12, color: 'var(--clr-muted)', marginTop: 3 }}>{t.label}</div>
+      {/* Top Visualization */}
+      <div style={{ height: 160, marginBottom: 24, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: '20px 20px 0 20px' }}>
+        {isLoading ? (
+          <div className="skeleton" style={{ width: '100%', height: '100%', borderRadius: 8 }} />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <XAxis dataKey="name" stroke="#475569" fontSize={11} tickLine={false} axisLine={false} dy={5} />
+              <Tooltip 
+                cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} 
+              />
+              <Bar dataKey="covered" stackId="a" fill="#22c55e" radius={[0, 0, 4, 4]} />
+              <Bar dataKey="at_risk" stackId="a" fill="#f59e0b" />
+              <Bar dataKey="critical" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* Master-Detail Layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 24, alignItems: 'flex-start' }}>
+        
+        {/* Left Panel: Master List */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '600px', overflowY: 'auto', paddingRight: 8 }}>
+          {isLoading ? (
+            Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 90, borderRadius: 12 }} />)
+          ) : cycles?.length === 0 ? (
+             <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+               <CheckCircle size={32} style={{ color: '#22c55e', margin: '0 auto 12px' }} />
+               No cycles in window
+             </div>
+          ) : (
+            cycles?.map(card => {
+              const isSelected = selectedCycleId === card.cycle_id
+              const cfg = STATE_CFG[card.state]
+              return (
+                <div 
+                  key={card.cycle_id} 
+                  onClick={() => setSelectedCycleId(card.cycle_id)}
+                  style={{
+                    background: isSelected ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)',
+                    border: `1px solid ${isSelected ? cfg.color : 'rgba(255,255,255,0.05)'}`,
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    position: 'relative',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {isSelected && (
+                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: cfg.color }} />
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: isSelected ? '#f8fafc' : '#cbd5e1' }}>
+                      {card.patient_name || `Patient #${card.patient_id}`}
+                    </div>
+                    <div style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: cfg.bg, color: cfg.color, fontWeight: 700 }}>
+                      {card.state.replace('_', ' ')}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Due: {new Date(card.due_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}</span>
+                    <span>Score: {card.confidence_score}%</span>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {/* Right Panel: Detail View */}
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: 28, minHeight: '600px' }}>
+          {selectedCycle ? (
+            <DetailView cycle={selectedCycle} />
+          ) : (
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+               <Activity size={48} style={{ opacity: 0.2, marginBottom: 16 }} />
+               <p>Select a cycle from the list to view details</p>
             </div>
-          ))}
+          )}
         </div>
-      )}
 
-      {isLoading && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 130, borderRadius: 12 }} />)}
-        </div>
-      )}
-
-      {isError && (
-        <div style={{ color: '#ef4444', padding: 20, fontSize: 14 }}>⚠️ Could not load cycles.</div>
-      )}
-
-      {/* Grouped cycle cards */}
-      {!isLoading && cycles && cycles.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--clr-muted)' }}>
-          <CheckCircle size={32} style={{ color: '#22c55e', marginBottom: 12, display: 'block', margin: '0 auto 12px' }} />
-          <p>No cycles due in the next {days} days.</p>
-        </div>
-      )}
-
-      {[
-        { group: critical, title: '🚨 Critical', show: critical.length > 0 },
-        { group: atRisk, title: '⚠️ At Risk', show: atRisk.length > 0 },
-        { group: covered, title: '✅ Covered', show: covered.length > 0 },
-      ].filter(g => g.show).map(({ group, title }) => (
-        <div key={title} style={{ marginBottom: 28 }}>
-          <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--clr-muted)', marginBottom: 12, letterSpacing: '0.05em' }}>
-            {title} ({group.length})
-          </h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
-            {group.map(card => <CycleCardView key={card.cycle_id} card={card} />)}
-          </div>
-        </div>
-      ))}
+      </div>
     </div>
   )
 }
