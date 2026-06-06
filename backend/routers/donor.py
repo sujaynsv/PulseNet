@@ -55,6 +55,8 @@ class DonorProfile(BaseModel):
     general_availability: str | None
     bridge_preference: bool | None
     travel_radius: int | None
+    languages: str | None
+    medical_notes: str | None
 
     class Config:
         from_attributes = True
@@ -73,6 +75,8 @@ class UpdateProfileRequest(BaseModel):
     general_availability: str | None = None
     bridge_preference: bool | None = None
     travel_radius: int | None = None
+    languages: str | None = None
+    medical_notes: str | None = None
 
 
 class MyBridgeResponse(BaseModel):
@@ -240,6 +244,37 @@ async def log_my_donation(
         "total_donations": donor.donations_till_date,
     }
 
+
+class EditDonationRequest(BaseModel):
+    donation_date: date | None = None
+    hospital: str | None = None
+    notes: str | None = None
+
+@router.patch("/me/history/{log_id}")
+async def edit_my_donation(
+    log_id: int,
+    body: EditDonationRequest,
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Edit a past donation log."""
+    from fastapi import HTTPException
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    
+    # Verify the log belongs to this donor
+    log = await db.get(TransfusionLog, log_id)
+    if not log or log.donor_id != donor.id:
+        raise HTTPException(status_code=404, detail="Donation log not found")
+        
+    if body.donation_date:
+        log.transfusion_date = body.donation_date
+    if body.hospital is not None:
+        log.hospital = body.hospital
+    if body.notes is not None:
+        log.notes = body.notes
+        
+    await db.commit()
+    return {"message": "Donation log updated successfully"}
 
 @router.get("/me/history")
 async def get_donation_history(
@@ -436,4 +471,88 @@ async def respond_to_requirement(
         "status": final_status,
         "requirement_status": requirement.status,
         "confidence_score": score_data["score"]
+    }
+
+
+class UpdateStatusRequest(BaseModel):
+    status: str  # "active" | "inactive" | "not eligible"
+
+@router.patch("/me/status")
+async def update_my_status(
+    body: UpdateStatusRequest,
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    # Allows setting "inactive" (pausing participation) or back to "active". 
+    # "not eligible" is usually system-managed via cooldown.
+    donor.user_donation_active_status = body.status
+    donor.status = body.status
+    await db.commit()
+    await db.refresh(donor)
+    return {"message": "Status updated successfully", "status": donor.status}
+
+
+class RescheduleSuggestionRequest(BaseModel):
+    suggested_date: date
+    suggested_time: str | None = None
+
+@router.post("/me/requirements/{requirement_id}/reschedule-suggestion")
+async def suggest_reschedule(
+    requirement_id: int,
+    body: RescheduleSuggestionRequest,
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    # Ideally, we would save this to a new RescheduleSuggestion table or update the RequirementResponse
+    # For now, we update the RequirementResponse with a special 'reschedule_requested' status
+    resp_res = await db.execute(
+        select(RequirementResponse)
+        .where(RequirementResponse.requirement_id == requirement_id)
+        .where(RequirementResponse.donor_id == donor.id)
+        .limit(1)
+    )
+    resp = resp_res.scalar_one_or_none()
+    if not resp:
+        resp = RequirementResponse(
+            requirement_id=requirement_id,
+            donor_id=donor.id,
+            status="reschedule_requested"
+        )
+        db.add(resp)
+    else:
+        resp.status = "reschedule_requested"
+        
+    # We could log the suggested_date in notes or a specific column if needed.
+    await db.commit()
+    return {"message": "Reschedule suggestion submitted successfully", "status": "reschedule_requested"}
+
+
+@router.get("/me/impact")
+async def get_my_impact(
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import func
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    
+    # Total donations (from TransfusionLog)
+    total_donations = (await db.execute(
+        select(func.count(TransfusionLog.id))
+        .where(TransfusionLog.donor_id == donor.id)
+        .where(TransfusionLog.status == "completed")
+    )).scalar() or 0
+
+    # Cycles supported (from RequirementResponse where confirmed/standby)
+    cycles_supported = (await db.execute(
+        select(func.count(RequirementResponse.id))
+        .where(RequirementResponse.donor_id == donor.id)
+        .where(RequirementResponse.status.in_(["confirmed", "standby"]))
+    )).scalar() or 0
+
+    return {
+        "total_donations": donor.donations_till_date or total_donations,
+        "cycles_supported": cycles_supported,
+        "emergencies_responded": 0  # To be implemented when Emergency feature is built
     }

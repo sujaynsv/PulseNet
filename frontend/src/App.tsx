@@ -42,24 +42,23 @@ function RootRedirect() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            
-            {/* Admin Routes */}
-            <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
-              <Route path="/admin" element={<AppLayout><AdminDashboard /></AppLayout>} />
-              <Route path="/admin/patients" element={<AppLayout><PatientsList /></AppLayout>} />
-              <Route path="/admin/patients/:id" element={<AppLayout><PatientDetails /></AppLayout>} />
-              <Route path="/admin/pods" element={<AppLayout><PodCentre /></AppLayout>} />
-              <Route path="/admin/cycles" element={<AppLayout><CycleReadiness /></AppLayout>} />
-              <Route path="/admin/emergencies" element={<AppLayout><EmergencyBoard /></AppLayout>} />
-              <Route path="/admin/centers" element={<AppLayout><CenterStress /></AppLayout>} />
-              <Route path="/admin/donors" element={<AppLayout><DonorDirectory /></AppLayout>} />
-            </Route>
+    <AuthProvider>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          
+          {/* Admin Routes */}
+          <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
+            <Route path="/admin" element={<AppLayout><AdminDashboard /></AppLayout>} />
+            <Route path="/admin/patients" element={<AppLayout><PatientsList /></AppLayout>} />
+            <Route path="/admin/patients/:id" element={<AppLayout><PatientDetails /></AppLayout>} />
+            <Route path="/admin/pods" element={<AppLayout><PodCentre /></AppLayout>} />
+            <Route path="/admin/cycles" element={<AppLayout><CycleReadiness /></AppLayout>} />
+            <Route path="/admin/emergencies" element={<AppLayout><EmergencyBoard /></AppLayout>} />
+            <Route path="/admin/centers" element={<AppLayout><CenterStress /></AppLayout>} />
+            <Route path="/admin/donors" element={<AppLayout><DonorDirectory /></AppLayout>} />
+          </Route>
 
           {/* Donor Routes */}
           <Route element={<ProtectedRoute allowedRoles={['Donor']} />}>

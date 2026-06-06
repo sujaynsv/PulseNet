@@ -11,6 +11,8 @@ async def migrate_columns():
             ("general_availability", "VARCHAR(128)"),
             ("bridge_preference", "BOOLEAN DEFAULT TRUE"),
             ("travel_radius", "INTEGER"),
+            ("languages", "VARCHAR(128)"),
+            ("medical_notes", "VARCHAR(512)"),
         ]
         for name, col_type in columns:
             try:
