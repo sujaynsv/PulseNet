@@ -184,6 +184,78 @@ async def list_patients(
     return summaries
 
 
+@router.get("/patients/{patient_id}", response_model=PatientSummary)
+async def get_patient_detail(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    p = await db.get(User, patient_id)
+    if not p or p.role != "Patient":
+        raise HTTPException(404, "Patient not found")
+    
+    bridge = (await db.execute(select(Bridge).where(Bridge.patient_id == p.id).options(selectinload(Bridge.members)))).scalar_one_or_none()
+    
+    return PatientSummary(
+        id=p.id,
+        external_id=p.external_id,
+        name=p.name,
+        blood_group=p.blood_group,
+        expected_next_transfusion_date=p.expected_next_transfusion_date,
+        transfusion_frequency_days=p.transfusion_frequency_days,
+        bridge_id=bridge.id if bridge else None,
+        bridge_slots_filled=len(bridge.members) if bridge else 0,
+    )
+
+
+@router.get("/patients/{patient_id}/cycles")
+async def get_patient_cycles(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    patient = await db.get(User, patient_id)
+    if not patient or patient.role != "Patient": raise HTTPException(404, "Patient not found")
+    
+    cycles = (await db.execute(
+        select(Cycle).where(Cycle.patient_id == patient.id).order_by(Cycle.due_date.asc())
+    )).scalars().all()
+    return cycles
+
+
+@router.post("/patients/{patient_id}/generate-cycles")
+async def generate_patient_cycles(
+    patient_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db)
+):
+    patient = await db.get(User, patient_id)
+    if not patient or patient.role != "Patient": raise HTTPException(404, "Patient not found")
+    
+    import uuid
+    from datetime import date, timedelta
+    
+    freq = patient.transfusion_frequency_days or 18
+    next_date = patient.expected_next_transfusion_date or (date.today() + timedelta(days=freq))
+    
+    for i in range(6):
+        c = Cycle(
+            external_cycle_id=str(uuid.uuid4()),
+            patient_id=patient.id,
+            due_date=next_date + timedelta(days=freq * i),
+            expected_units=2,
+            status="routine",
+            confidence_score=0
+        )
+        db.add(c)
+        
+    await db.commit()
+    
+    cycles = (await db.execute(
+        select(Cycle).where(Cycle.patient_id == patient.id).order_by(Cycle.due_date.asc())
+    )).scalars().all()
+    return cycles
+
 @router.get("/bridge/mock")
 async def get_mock_bridge_panel(_admin: AdminUser):
     """Mock ML ranked bridge for the demo dashboard."""

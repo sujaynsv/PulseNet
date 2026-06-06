@@ -19,6 +19,7 @@ export function Sidebar() {
       case 'Patient':
         return [
           { to: '/patient', label: 'My Bridge', Icon: GitBranchIcon },
+          { to: '/patient/profile', label: 'My Profile', Icon: UserIcon },
         ];
       default:
         return [];
