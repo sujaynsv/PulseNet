@@ -38,6 +38,7 @@ from sqlalchemy.orm import selectinload
 
 from auth import AdminUser
 from database import get_db
+from config import get_settings
 from models import Bridge, BridgeMember, Cycle, EmergencyCase, TransfusionLog, User
 from services.notification import build_donor_reminder_message, send_sms_reminder
 
@@ -697,6 +698,308 @@ async def center_stress(
     # Sort: most stressed first
     rows.sort(key=lambda r: r.stress_score, reverse=True)
     return rows
+
+
+# ── Geo-enriched Center Stress (for map) ──────────────────────────────────────
+
+# Lat/lon coordinates for known Hyderabad locations (mirror of seed.py)
+LOCATION_COORDS: dict[str, tuple[float, float]] = {
+    "Banjara Hills":  (17.4103, 78.4373),
+    "Himayatnagar":   (17.3877, 78.4764),
+    "Kukatpally":     (17.4940, 78.3489),
+    "KPHB Colony":    (17.4845, 78.3878),
+    "Mehdipatnam":    (17.3600, 78.4700),
+    "Uppal":          (17.3950, 78.5500),
+    "Secunderabad":   (17.4375, 78.4983),
+    "LB Nagar":       (17.3504, 78.5498),
+    "Dilsukhnagar":   (17.3650, 78.5100),
+    "Ameerpet":       (17.4367, 78.4482),
+    "Nampally":       (17.3850, 78.4900),
+    "Begumpet":       (17.4431, 78.4670),
+    "Miyapur":        (17.4969, 78.3576),
+    "Hayathnagar":    (17.3348, 78.5856),
+    "Kompally":       (17.5486, 78.4854),
+    "Out-of-City (Remote Donor)": (17.40, 78.50),  # default center for remote
+}
+
+
+class CenterStressGeoRow(BaseModel):
+    center_name: str
+    latitude: float
+    longitude: float
+    patient_count: int
+    cycles_next_7_days: int
+    open_emergencies: int
+    eligible_donors_nearby: int
+    stress_score: int
+    stress_level: str
+
+
+@router.get("/center-stress/geo", response_model=list[CenterStressGeoRow])
+async def center_stress_geo(
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Same as center-stress but enriched with lat/lon for map rendering."""
+    # Reuse the regular center-stress data
+    rows = await center_stress(_admin=_admin, db=db)
+
+    geo_rows = []
+    for r in rows:
+        coords = LOCATION_COORDS.get(r.center_name, (17.40, 78.50))
+        geo_rows.append(CenterStressGeoRow(
+            center_name=r.center_name,
+            latitude=coords[0],
+            longitude=coords[1],
+            patient_count=r.patient_count,
+            cycles_next_7_days=r.cycles_next_7_days,
+            open_emergencies=r.open_emergencies,
+            eligible_donors_nearby=r.eligible_donors_nearby,
+            stress_score=r.stress_score,
+            stress_level=r.stress_level,
+        ))
+    return geo_rows
+
+
+# ── AI Insights (Bedrock) ────────────────────────────────────────────────────
+
+@router.post("/ai-insights")
+async def generate_ai_insights(
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Gather operational data and call Bedrock for actionable admin insights.
+    Returns structured AI analysis with suggested actions and risk alerts.
+    """
+    from services.bedrock import invoke_bedrock
+
+    settings = get_settings()
+
+    # Gather current operational data
+    stress_rows = await center_stress(_admin=_admin, db=db)
+
+    today = date.today()
+    week_ahead = today + timedelta(days=7)
+
+    # Count key metrics
+    total_patients = (await db.execute(
+        select(func.count(User.id)).where(User.role == "Patient")
+    )).scalar_one()
+
+    total_donors = (await db.execute(
+        select(func.count(User.id)).where(User.role == "Donor")
+    )).scalar_one()
+
+    eligible_donors = (await db.execute(
+        select(func.count(User.id)).where(
+            User.role == "Donor", User.eligibility_status == "eligible"
+        )
+    )).scalar_one()
+
+    cycles_7d = (await db.execute(
+        select(func.count(Cycle.id)).where(
+            Cycle.due_date >= today, Cycle.due_date <= week_ahead
+        )
+    )).scalar_one()
+
+    at_risk_cycles = (await db.execute(
+        select(func.count(Cycle.id)).where(
+            Cycle.due_date >= today, Cycle.due_date <= week_ahead,
+            Cycle.confidence_score < 70,
+        )
+    )).scalar_one()
+
+    critical_cycles = (await db.execute(
+        select(func.count(Cycle.id)).where(
+            Cycle.due_date >= today, Cycle.due_date <= week_ahead,
+            Cycle.confidence_score < 40,
+        )
+    )).scalar_one()
+
+    open_emergencies = (await db.execute(
+        select(func.count(EmergencyCase.id)).where(EmergencyCase.case_closed == False)
+    )).scalar_one()
+
+    inactive_donors = (await db.execute(
+        select(func.count(User.id)).where(
+            User.role == "Donor", User.user_donation_active_status == "Inactive"
+        )
+    )).scalar_one()
+
+    # Build center stress summary for the prompt
+    center_summary = "\n".join([
+        f"  - {r.center_name}: {r.patient_count} patients, {r.cycles_next_7_days} cycles in 7d, "
+        f"{r.eligible_donors_nearby} eligible donors, stress={r.stress_level} (score {r.stress_score})"
+        for r in stress_rows[:10]
+    ])
+
+    prompt = f"""You are PulseNet AI — an intelligent operations assistant for a thalassemia care coordination platform in Hyderabad, India.
+
+Analyze the following real-time operational data and provide actionable insights for the admin command center.
+
+## Current Operational Snapshot (as of {today.isoformat()})
+
+**Population:**
+- Total patients (thalassemia): {total_patients}
+- Total donors in network: {total_donors}
+- Eligible donors (can donate today): {eligible_donors}
+- Inactive donors (need re-engagement): {inactive_donors}
+
+**Upcoming Transfusion Cycles (next 7 days):**
+- Total cycles due: {cycles_7d}
+- At-risk cycles (confidence < 70%): {at_risk_cycles}
+- Critical cycles (confidence < 40%): {critical_cycles}
+
+**Emergencies:**
+- Open emergency cases: {open_emergencies}
+
+**Center Stress by Location:**
+{center_summary}
+
+## Instructions
+
+Based on this data, provide exactly 5-7 actionable insights in this JSON format:
+[
+  {{
+    "type": "action" | "warning" | "info",
+    "priority": "high" | "medium" | "low",
+    "title": "Short action title",
+    "description": "Detailed 1-2 sentence description of what the admin should do and why",
+    "metric": "Relevant number or stat"
+  }}
+]
+
+Focus on:
+1. Donor gap analysis — which centers need more donors activated?
+2. Cycle risk mitigation — which patients need immediate bridge attention?
+3. Re-engagement opportunities — how many inactive donors could be reactivated?
+4. Emergency preparedness — are there enough donors near emergency-prone centers?
+5. Predictive warnings — any centers trending toward critical?
+
+Respond ONLY with the JSON array, no other text."""
+
+    raw_response = await invoke_bedrock(prompt, settings)
+
+    if raw_response is None:
+        # Fallback: generate deterministic insights from data
+        insights = _generate_fallback_insights(
+            stress_rows, total_patients, total_donors, eligible_donors,
+            inactive_donors, cycles_7d, at_risk_cycles, critical_cycles,
+            open_emergencies,
+        )
+        return {"source": "local", "insights": insights}
+
+    # Try to parse JSON from Bedrock response
+    try:
+        # Strip any markdown code fences
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0]
+        cleaned = cleaned.strip()
+
+        import json as json_mod
+        insights = json_mod.loads(cleaned)
+        return {"source": "bedrock", "insights": insights}
+    except Exception:
+        logger.warning("Could not parse Bedrock response as JSON, returning raw")
+        return {"source": "bedrock", "raw": raw_response, "insights": []}
+
+
+def _generate_fallback_insights(
+    stress_rows, total_patients, total_donors, eligible_donors,
+    inactive_donors, cycles_7d, at_risk_cycles, critical_cycles,
+    open_emergencies,
+) -> list[dict]:
+    """Generate deterministic insights when Bedrock is unavailable."""
+    insights = []
+
+    # Find critical centers
+    critical_centers = [r for r in stress_rows if r.stress_level == "Critical"]
+    high_centers = [r for r in stress_rows if r.stress_level == "High"]
+
+    if critical_centers:
+        names = ", ".join(c.center_name for c in critical_centers[:3])
+        insights.append({
+            "type": "warning",
+            "priority": "high",
+            "title": f"{len(critical_centers)} Critical Center(s) Detected",
+            "description": f"{names} {'are' if len(critical_centers) > 1 else 'is'} under severe stress. "
+                           f"Immediate donor activation needed to cover upcoming transfusion cycles.",
+            "metric": f"{len(critical_centers)} critical",
+        })
+
+    if at_risk_cycles > 0:
+        insights.append({
+            "type": "warning",
+            "priority": "high",
+            "title": f"{at_risk_cycles} At-Risk Cycles This Week",
+            "description": f"Out of {cycles_7d} cycles due in 7 days, {at_risk_cycles} have confidence below 70%. "
+                           f"Consider activating backup donors or triggering AI refill for affected pods.",
+            "metric": f"{at_risk_cycles}/{cycles_7d}",
+        })
+
+    if inactive_donors > 50:
+        reactivation_pct = round((inactive_donors / max(total_donors, 1)) * 100)
+        insights.append({
+            "type": "action",
+            "priority": "medium",
+            "title": f"Re-engage {inactive_donors} Inactive Donors",
+            "description": f"{reactivation_pct}% of your donor pool is inactive. "
+                           f"An SMS re-engagement campaign could recover significant capacity.",
+            "metric": f"{reactivation_pct}% inactive",
+        })
+
+    if open_emergencies > 0:
+        insights.append({
+            "type": "warning",
+            "priority": "high",
+            "title": f"{open_emergencies} Open Emergency Case(s)",
+            "description": "Active emergencies require immediate attention. "
+                           "Verify donor assignment and center readiness for each case.",
+            "metric": str(open_emergencies),
+        })
+
+    # Donor-to-patient ratio insight
+    ratio = round(eligible_donors / max(total_patients, 1), 1)
+    if ratio < 10:
+        insights.append({
+            "type": "info",
+            "priority": "medium",
+            "title": f"Donor-to-Patient Ratio: {ratio}:1",
+            "description": f"With {eligible_donors} eligible donors for {total_patients} patients, "
+                           f"the network is {'thin' if ratio < 5 else 'moderate'}. "
+                           f"Target ratio is 15:1 for full coverage.",
+            "metric": f"{ratio}:1",
+        })
+
+    if high_centers:
+        for c in high_centers[:2]:
+            donor_gap = max(10 - c.eligible_donors_nearby, 0)
+            if donor_gap > 0:
+                insights.append({
+                    "type": "action",
+                    "priority": "medium",
+                    "title": f"Activate {donor_gap} More Donors in {c.center_name}",
+                    "description": f"{c.center_name} has {c.cycles_next_7_days} cycles in 7 days but only "
+                                   f"{c.eligible_donors_nearby} nearby eligible donors. Activate more to reduce stress.",
+                    "metric": f"+{donor_gap} needed",
+                })
+
+    # If we still have no insights, add a general status
+    if not insights:
+        insights.append({
+            "type": "info",
+            "priority": "low",
+            "title": "System Operating Normally",
+            "description": f"All {len(stress_rows)} centers are within acceptable stress levels. "
+                           f"Next review recommended in 24 hours.",
+            "metric": "✓ OK",
+        })
+
+    return insights[:7]
 
 
 # ── Legacy & Existing Endpoints ───────────────────────────────────────────────
