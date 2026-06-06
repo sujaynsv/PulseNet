@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # ── AWS SNS (SMS notifications) ────────────────────────────────────────
     SNS_TOPIC_ARN: str = ""
 
+    # ── Twilio ─────────────────────────────────────────────────────────────
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_WHATSAPP_FROM: str = "whatsapp:+14155238886"
+
+
     # ── AWS SageMaker ──────────────────────────────────────────────────────
     SAGEMAKER_ENDPOINT_NAME: str = "pulsenet-xgboost-endpoint"
 
