@@ -1,142 +1,227 @@
 """
-PulseNet — Donor Router
-========================
-Handles all donor-persona endpoints.
-
-Endpoints:
-  GET  /api/donor/{external_id}      → Fetch donor profile
-  PUT  /api/donor/{external_id}      → Update donor profile / availability
-  POST /api/donor/webhook/availability → Receive inbound availability confirmation
-  GET  /api/donor/eligible            → List all currently eligible donors
+PulseNet — Donor Router (Authenticated: Donor role)
+=====================================================
+GET  /api/donor/me            → My profile
+PUT  /api/donor/me            → Edit profile (blood group, phone, location)
+GET  /api/donor/me/bridge     → Which patient/bridge I'm assigned to
+POST /api/donor/me/donation   → Log a donation I just completed
+GET  /api/donor/me/history    → My donation history
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from auth import DonorUser
 from database import get_db
-from models import User
-from schemas import DonorAvailabilityWebhook, UserRead, UserUpdate
+from models import Bridge, BridgeMember, TransfusionLog, User
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
+DONATION_COOLDOWN_DAYS = 90  # Donors can't donate again for 90 days
 
-# ── GET: donor profile ────────────────────────────────────────────────────────
 
-@router.get(
-    "/{external_id}",
-    response_model=UserRead,
-    summary="Get donor profile by external ID",
-)
-async def get_donor(
-    external_id: str,
+# ── Schemas ───────────────────────────────────────────────────────────────────
+
+class DonorProfile(BaseModel):
+    id: int
+    external_id: str
+    name: str | None
+    email: str | None
+    phone: str | None
+    blood_group: str | None
+    gender: str | None
+    age: int | None
+    location: str | None
+    eligibility_status: str | None
+    user_donation_active_status: str | None
+    donations_till_date: int | None
+    last_donation_date: date | None
+    next_eligible_date: date | None
+
+    class Config:
+        from_attributes = True
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    blood_group: str | None = None
+    gender: str | None = None
+    age: int | None = None
+    location: str | None = None
+
+
+class MyBridgeResponse(BaseModel):
+    assigned: bool
+    bridge_id: int | None = None
+    patient_name: str | None = None
+    patient_blood_group: str | None = None
+    next_transfusion_date: date | None = None
+    cycle_position: int | None = None
+    my_last_donation_date: date | None = None
+    my_next_due_date: date | None = None
+    slot_status: str | None = None
+
+
+class LogDonationRequest(BaseModel):
+    donation_date: date
+    hospital: str | None = None
+    notes: str | None = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _get_donor_by_sub(sub: str, db: AsyncSession) -> User:
+    user = (await db.execute(select(User).where(User.cognito_sub == sub))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Donor profile not found. Please complete registration.")
+    if user.role != "Donor":
+        raise HTTPException(status_code=403, detail="This endpoint is for Donors only")
+    return user
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/me", response_model=DonorProfile)
+async def get_my_profile(
+    current_donor: DonorUser,
     db: AsyncSession = Depends(get_db),
-) -> UserRead:
-    result = await db.execute(
-        select(User).where(User.external_id == external_id)
-    )
-    donor = result.scalar_one_or_none()
-    if not donor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Donor '{external_id}' not found.",
-        )
-    return UserRead.model_validate(donor)
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    return DonorProfile.model_validate(donor)
 
 
-# ── PUT: update donor profile ─────────────────────────────────────────────────
-
-@router.put(
-    "/{external_id}",
-    response_model=UserRead,
-    summary="Update donor profile fields",
-)
-async def update_donor(
-    external_id: str,
-    payload: UserUpdate,
+@router.put("/me", response_model=DonorProfile)
+async def update_my_profile(
+    body: UpdateProfileRequest,
+    current_donor: DonorUser,
     db: AsyncSession = Depends(get_db),
-) -> UserRead:
-    result = await db.execute(
-        select(User).where(User.external_id == external_id)
-    )
-    donor = result.scalar_one_or_none()
-    if not donor:
-        raise HTTPException(status_code=404, detail="Donor not found.")
-
-    update_data = payload.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    updates = body.model_dump(exclude_none=True)
+    for field, value in updates.items():
         setattr(donor, field, value)
-
-    db.add(donor)
-    await db.flush()
-    logger.info("Donor %s profile updated: %s", external_id, update_data)
-    return UserRead.model_validate(donor)
+    await db.commit()
+    await db.refresh(donor)
+    return DonorProfile.model_validate(donor)
 
 
-# ── POST: availability webhook ────────────────────────────────────────────────
-
-@router.post(
-    "/webhook/availability",
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Receive donor availability confirmation (webhook)",
-    description=(
-        "Inbound webhook endpoint for automated communication loops "
-        "(WhatsApp bot, SMS, email reply parser). "
-        "Updates the donor's availability flag and optional next-donation date."
-    ),
-)
-async def donor_availability_webhook(
-    payload: DonorAvailabilityWebhook,
+@router.get("/me/bridge", response_model=MyBridgeResponse)
+async def get_my_bridge(
+    current_donor: DonorUser,
     db: AsyncSession = Depends(get_db),
-) -> Dict[str, Any]:
-    result = await db.execute(
-        select(User).where(User.external_id == payload.external_user_id)
-    )
-    donor = result.scalar_one_or_none()
-    if not donor:
-        raise HTTPException(status_code=404, detail="Donor not found.")
+):
+    """Returns which patient bridge this donor is assigned to."""
+    donor = await _get_donor_by_sub(current_donor.sub, db)
 
-    # Reflect availability in the DB
-    donor.user_donation_active_status = "Active" if payload.available else "Inactive"
-    if payload.confirmed_date:
-        donor.last_donation_date = payload.confirmed_date
-
-    db.add(donor)
-    logger.info(
-        "Webhook: Donor %s availability set to %s",
-        payload.external_user_id,
-        payload.available,
+    member_result = await db.execute(
+        select(BridgeMember)
+        .where(BridgeMember.donor_id == donor.id)
+        .options(
+            selectinload(BridgeMember.bridge).selectinload(Bridge.patient)
+        )
+        .limit(1)
     )
+    member = member_result.scalar_one_or_none()
+
+    if member is None:
+        return MyBridgeResponse(assigned=False)
+
+    patient = member.bridge.patient if member.bridge else None
+    return MyBridgeResponse(
+        assigned=True,
+        bridge_id=member.bridge_id,
+        patient_name=patient.name if patient else None,
+        patient_blood_group=patient.blood_group if patient else None,
+        next_transfusion_date=patient.expected_next_transfusion_date if patient else None,
+        cycle_position=member.cycle_position,
+        my_last_donation_date=member.last_donation_date,
+        my_next_due_date=member.expected_next_donation_date,
+        slot_status=member.slot_status,
+    )
+
+
+@router.post("/me/donation", status_code=status.HTTP_201_CREATED)
+async def log_my_donation(
+    body: LogDonationRequest,
+    current_donor: DonorUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Donor logs that they've completed a donation.
+    Updates: last_donation_date, next_eligible_date, BridgeMember slot, TransfusionLog.
+    """
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+
+    next_eligible = body.donation_date + timedelta(days=DONATION_COOLDOWN_DAYS)
+
+    # Update donor record
+    donor.last_donation_date = body.donation_date
+    donor.next_eligible_date = next_eligible
+    donor.eligibility_status = "not eligible"
+    donor.donations_till_date = (donor.donations_till_date or 0) + 1
+
+    # Update BridgeMember slot
+    member_result = await db.execute(
+        select(BridgeMember).where(BridgeMember.donor_id == donor.id).limit(1)
+    )
+    member = member_result.scalar_one_or_none()
+    if member:
+        member.donated_earlier = True
+        member.last_donation_date = body.donation_date
+        member.expected_next_donation_date = next_eligible
+        member.slot_status = "Active"
+
+        # Create TransfusionLog
+        bridge = await db.get(Bridge, member.bridge_id)
+        log = TransfusionLog(
+            patient_id=bridge.patient_id if bridge else 0,
+            donor_id=donor.id,
+            bridge_id=member.bridge_id,
+            transfusion_date=body.donation_date,
+            hospital=body.hospital,
+            notes=body.notes,
+            status="completed",
+        )
+        db.add(log)
+
+    await db.commit()
     return {
-        "accepted": True,
-        "donor_id": payload.external_user_id,
-        "available": payload.available,
+        "message": "Donation logged successfully",
+        "next_eligible_date": next_eligible.isoformat(),
+        "total_donations": donor.donations_till_date,
     }
 
 
-# ── GET: eligible donors list ─────────────────────────────────────────────────
-
-@router.get(
-    "/",
-    response_model=List[UserRead],
-    summary="List eligible donors",
-)
-async def list_eligible_donors(
-    blood_group: str | None = None,
-    limit: int = 50,
+@router.get("/me/history")
+async def get_donation_history(
+    current_donor: DonorUser,
     db: AsyncSession = Depends(get_db),
-) -> List[UserRead]:
-    query = select(User).where(User.eligibility_status == "eligible")
-    if blood_group:
-        query = query.where(User.blood_group == blood_group)
-    query = query.limit(limit)
-    result = await db.execute(query)
-    donors = result.scalars().all()
-    return [UserRead.model_validate(d) for d in donors]
+):
+    donor = await _get_donor_by_sub(current_donor.sub, db)
+    result = await db.execute(
+        select(TransfusionLog)
+        .where(TransfusionLog.donor_id == donor.id)
+        .order_by(TransfusionLog.transfusion_date.desc())
+        .limit(20)
+    )
+    logs = result.scalars().all()
+    return [
+        {
+            "id": log.id,
+            "transfusion_date": log.transfusion_date.isoformat(),
+            "hospital": log.hospital,
+            "notes": log.notes,
+            "status": log.status,
+        }
+        for log in logs
+    ]

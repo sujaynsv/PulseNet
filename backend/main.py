@@ -1,50 +1,43 @@
 """
 PulseNet — FastAPI Application Entry Point
 ==========================================
-Initializes CORS middleware, registers all persona routers,
-and exposes the /api/health endpoint for container health checks.
+Registers all routers, sets up CORS, and creates DB tables on startup.
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
-from config import settings
-from database import create_db_tables
-from routers import admin, donor, patient
+from config import get_settings
+from database import engine
+from models import Base
+from routers import admin, auth_router, donor, patient
 
-# ── Logging ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
 logger = logging.getLogger("pulsenet")
 
 
-# ── Lifespan (startup / shutdown) ────────────────────────────────────────────
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Run DB table creation on startup, clean up on shutdown."""
-    logger.info("🚀 PulseNet backend starting up …")
-    await create_db_tables()
-    logger.info("✅ Database tables verified / created.")
+async def lifespan(app: FastAPI):
+    """Create all DB tables on startup (idempotent)."""
+    logger.info("Starting PulseNet backend...")
+    settings = get_settings()
+    logger.info("DEMO_MODE=%s | ENV=%s", settings.DEMO_MODE, settings.ENV)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables ready.")
     yield
-    logger.info("👋 PulseNet backend shutting down.")
+    logger.info("Shutting down PulseNet backend.")
 
 
-# ── Application factory ───────────────────────────────────────────────────────
+settings = get_settings()
 app = FastAPI(
     title="PulseNet API",
-    description=(
-        "AI-enabled care coordination platform for Blood Warriors Foundation. "
-        "Supports Donor, Patient, and Admin persona flows."
-    ),
+    description="AI-enabled care coordination for Blood Warriors Foundation",
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -52,8 +45,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-# ── CORS ─────────────────────────────────────────────────────────────────────
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
@@ -62,27 +54,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ── Routers ──────────────────────────────────────────────────────────────────
-app.include_router(donor.router, prefix="/api/donor", tags=["Donor"])
-app.include_router(patient.router, prefix="/api/patient", tags=["Patient"])
-app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
-
-
-# ── Health check (required by docker-compose & AWS ECS) ─────────────────────
-@app.get("/api/health", summary="Health Check")
-async def health() -> JSONResponse:
-    """Lightweight endpoint for container orchestration health probes."""
-    return JSONResponse(
-        content={
-            "status": "ok",
-            "service": "pulsenet-backend",
-            "version": "1.0.0",
-        }
-    )
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(auth_router.router,    prefix="/api/auth",    tags=["Auth"])
+app.include_router(admin.router,          prefix="/api/admin",   tags=["Admin"])
+app.include_router(donor.router,          prefix="/api/donor",   tags=["Donor"])
+app.include_router(patient.router,        prefix="/api/patient", tags=["Patient"])
 
 
-# ── Root redirect ─────────────────────────────────────────────────────────────
-@app.get("/", include_in_schema=False)
-async def root() -> JSONResponse:
-    return JSONResponse({"message": "PulseNet API — visit /api/docs"})
+# ── Health endpoints ──────────────────────────────────────────────────────────
+@app.get("/api/health", tags=["Health"])
+async def health():
+    return {
+        "status": "ok",
+        "service": "pulsenet-backend",
+        "version": "1.0.0",
+        "demo_mode": settings.DEMO_MODE,
+    }
+
+
+@app.get("/api/ping", tags=["Health"])
+async def ping():
+    return {"pong": True}

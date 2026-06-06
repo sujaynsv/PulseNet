@@ -1,25 +1,59 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { Sidebar } from '@/components/Sidebar'
-import { Dashboard } from '@/pages/Dashboard'
-import { Donors } from '@/pages/Donors'
-import { Patients } from '@/pages/Patients'
-import { BloodBridges } from '@/pages/BloodBridges'
+import { Sidebar } from './components/Sidebar'
+import { AuthProvider } from './contexts/AuthContext'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { Login } from './pages/Login'
+import { AdminDashboard } from './pages/admin/AdminDashboard'
+import { PatientsList } from './pages/admin/PatientsList'
+import { DonorHome } from './pages/donor/DonorHome'
+import { PatientHome } from './pages/patient/PatientHome'
 
-export default function App() {
+const queryClient = new QueryClient()
+
+function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <BrowserRouter>
-      <div style={{ display: 'flex' }}>
-        <Sidebar />
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/donors" element={<Donors />} />
-            <Route path="/patients" element={<Patients />} />
-            <Route path="/bridges" element={<BloodBridges />} />
-          </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
+    <div className="layout">
+      <Sidebar />
+      <main className="main-content">
+        {children}
+      </main>
+    </div>
   )
 }
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            
+            {/* Admin Routes */}
+            <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
+              <Route path="/admin" element={<AppLayout><AdminDashboard /></AppLayout>} />
+              <Route path="/admin/patients" element={<AppLayout><PatientsList /></AppLayout>} />
+            </Route>
+
+            {/* Donor Routes */}
+            <Route element={<ProtectedRoute allowedRoles={['Donor']} />}>
+              <Route path="/donor" element={<AppLayout><DonorHome /></AppLayout>} />
+            </Route>
+
+            {/* Patient Routes */}
+            <Route element={<ProtectedRoute allowedRoles={['Patient']} />}>
+              <Route path="/patient" element={<AppLayout><PatientHome /></AppLayout>} />
+            </Route>
+
+            {/* Redirect root based on login status / role */}
+            <Route path="/" element={<ProtectedRoute />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </QueryClientProvider>
+  )
+}
+
+export default App

@@ -1,16 +1,34 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, Heart, GitBranch, Activity } from 'lucide-react'
-
-const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
-  { to: '/donors',    label: 'Donors',    Icon: Users },
-  { to: '/patients',  label: 'Patients',  Icon: Heart },
-  { to: '/bridges',   label: 'Blood Bridges', Icon: GitBranch },
-]
+import { LayoutDashboard, Users, Heart, LogOut, Activity, User as UserIcon, Calendar } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
 
 export function Sidebar() {
+  const { role, logout } = useAuth();
+
+  const getNavItems = () => {
+    switch (role) {
+      case 'Admin':
+        return [
+          { to: '/admin', label: 'Dashboard', Icon: LayoutDashboard },
+          { to: '/admin/patients',  label: 'Patients',  Icon: Heart },
+        ];
+      case 'Donor':
+        return [
+          { to: '/donor', label: 'My Profile', Icon: UserIcon },
+        ];
+      case 'Patient':
+        return [
+          { to: '/patient', label: 'My Bridge', Icon: GitBranchIcon },
+        ];
+      default:
+        return [];
+    }
+  };
+
+  const NAV_ITEMS = getNavItems();
+
   return (
-    <aside className="sidebar" style={{ padding: '0' }}>
+    <aside className="sidebar" style={{ padding: '0', display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Logo */}
       <div style={{
         padding: '28px 20px 24px',
@@ -37,7 +55,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav style={{ padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <nav style={{ padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
         <div style={{ fontSize: 10, color: 'var(--clr-muted)', letterSpacing: '0.12em', textTransform: 'uppercase', padding: '8px 8px 4px', fontWeight: 600 }}>
           Main Menu
         </div>
@@ -45,6 +63,7 @@ export function Sidebar() {
           <NavLink
             key={to}
             to={to}
+            end
             className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
           >
             <Icon size={16} />
@@ -53,9 +72,20 @@ export function Sidebar() {
         ))}
       </nav>
 
+      {/* Logout button */}
+      <div style={{ padding: '16px 12px', borderTop: '1px solid var(--clr-border)' }}>
+        <button 
+          onClick={logout}
+          className="nav-link w-full text-left flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors"
+        >
+          <LogOut size={16} />
+          Sign Out
+        </button>
+      </div>
+
       {/* Footer badge */}
       <div style={{
-        position: 'absolute', bottom: 20, left: 12, right: 12,
+        margin: '12px',
         padding: '12px 16px',
         background: 'rgba(192,25,44,0.1)',
         border: '1px solid rgba(192,25,44,0.2)',
@@ -69,5 +99,16 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  )
+}
+
+function GitBranchIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="6" y1="3" x2="6" y2="15"></line>
+      <circle cx="18" cy="6" r="3"></circle>
+      <circle cx="6" cy="18" r="3"></circle>
+      <path d="M18 9a9 9 0 0 1-9 9"></path>
+    </svg>
   )
 }

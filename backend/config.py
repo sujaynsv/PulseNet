@@ -1,14 +1,10 @@
 """
 PulseNet — Application Configuration
-=====================================
-Reads environment variables via Pydantic Settings v2.
+Pydantic Settings v2: reads from environment variables and .env file.
 """
-
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,37 +12,60 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        case_sensitive=False,
         extra="ignore",
     )
 
-    # Database
-    database_url: str = (
-        "postgresql+asyncpg://pulsenet:pulsenet_dev_secret@localhost:5432/pulsenet"
-    )
+    # ── App ────────────────────────────────────────────────────────────────
+    ENV: str = "development"
+    SECRET_KEY: str = "change-me-in-production"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
-    # Security
-    secret_key: str = "dev_secret_change_me"
+    # DEMO_MODE = True → bypass Cognito, use simple JWT for local testing
+    DEMO_MODE: bool = True
 
-    # CORS — comma-separated in .env
-    allowed_origins: str = "http://localhost:3000,http://frontend:3000"
+    # ── Database (AWS RDS PostgreSQL) ───────────────────────────────────────
+    DATABASE_URL: str = "postgresql+asyncpg://pulsenet:pulsenet@localhost:5432/pulsenet"
 
-    # App
-    env: str = "development"
-    debug: bool = False
+    # ── AWS ────────────────────────────────────────────────────────────────
+    AWS_REGION: str = "us-east-1"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
 
-    # AWS (optional; populated when deploying to cloud)
-    aws_region: str = "us-east-1"
-    sagemaker_endpoint_name: str = "pulsenet-xgboost-endpoint"
+    # ── AWS Cognito ────────────────────────────────────────────────────────
+    COGNITO_USER_POOL_ID: str = ""
+    COGNITO_CLIENT_ID: str = ""
+    COGNITO_CLIENT_SECRET: str = ""   # Leave blank if app client has no secret
+    COGNITO_REGION: str = "us-east-1"
 
     @property
-    def allowed_origins_list(self) -> List[str]:
-        return [o.strip() for o in self.allowed_origins.split(",")]
+    def cognito_jwks_url(self) -> str:
+        return (
+            f"https://cognito-idp.{self.COGNITO_REGION}.amazonaws.com"
+            f"/{self.COGNITO_USER_POOL_ID}/.well-known/jwks.json"
+        )
+
+    @property
+    def cognito_issuer(self) -> str:
+        return (
+            f"https://cognito-idp.{self.COGNITO_REGION}.amazonaws.com"
+            f"/{self.COGNITO_USER_POOL_ID}"
+        )
+
+    # ── AWS SNS (SMS notifications) ────────────────────────────────────────
+    SNS_TOPIC_ARN: str = ""
+
+    # ── AWS SageMaker ──────────────────────────────────────────────────────
+    SAGEMAKER_ENDPOINT_NAME: str = "pulsenet-xgboost-endpoint"
+
+    # ── AWS Bedrock ────────────────────────────────────────────────────────
+    BEDROCK_MODEL_ID: str = "anthropic.claude-3-haiku-20240307-v1:0"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
 
 
-@lru_cache
+@lru_cache()
 def get_settings() -> Settings:
     return Settings()
-
-
-# Module-level singleton — import `settings` throughout the app
-settings = get_settings()

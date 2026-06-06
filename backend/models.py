@@ -1,239 +1,151 @@
 """
-PulseNet — SQLAlchemy 2.0 Database Models
-==========================================
-All columns mapped directly from Dataset.csv columns.
-Uses `Mapped` + `mapped_column` declarative syntax (SA 2.0).
+PulseNet — SQLAlchemy 2.0 Models
+===================================
+Tables:
+  users            → donors and patients (role column differentiates)
+  bridges          → one bridge per patient (8 donor slots)
+  bridge_members   → the 8 donor↔bridge relationships (cycle position 1-8)
+  transfusion_logs → every completed transfusion event
 
-Entities:
-  - User        → Unified identity (donor or patient)
-  - Bridge      → Blood Bridge linking a patient to a set of donors
-  - BridgeMember → Join table: User ↔ Bridge with donor-specific metrics
-  - TransfusionLog → Historical record of each transfusion event
+All columns mapped directly from Dataset.csv + extended for the platform.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Optional
 
-from sqlalchemy import (
-    Boolean,
-    Date,
-    DateTime,
-    Enum,
-    Float,
-    ForeignKey,
-    Integer,
-    Numeric,
-    String,
-    Text,
-    func,
-)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from database import Base
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
-# ── Enumerations (mirrors Dataset.csv value sets) ─────────────────────────────
-
-class RoleEnum(str):
-    BRIDGE_DONOR = "Bridge Donor"
-    EMERGENCY_DONOR = "Emergency Donor"
-    VOLUNTEER = "Volunteer"
+class Base(DeclarativeBase):
+    pass
 
 
-class BloodGroupEnum(str):
-    A_POS = "A Positive"
-    A_NEG = "A Negative"
-    B_POS = "B Positive"
-    B_NEG = "B Negative"
-    AB_POS = "AB Positive"
-    AB_NEG = "AB Negative"
-    O_POS = "O Positive"
-    O_NEG = "O Negative"
-
-
-class DonorTypeEnum(str):
-    ONE_TIME = "One-Time Donor"
-    REGULAR = "Regular Donor"
-    OTHER = "Other"
-
-
-# ── User model ────────────────────────────────────────────────────────────────
+# ── User (Donor OR Patient) ───────────────────────────────────────────────────
 
 class User(Base):
-    """
-    Unified user entity representing both donors and patients.
-    Maps to: user_id, blood_group, gender, latitude, longitude,
-             registration_date, role, role_status, status columns.
-    """
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # Hashed external ID from dataset (hex prefix `\x…`)
-    external_id: Mapped[str] = mapped_column(String(256), unique=True, nullable=False, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
-    # Demographics
-    blood_group: Mapped[Optional[str]] = mapped_column(String(20))
-    gender: Mapped[Optional[str]] = mapped_column(String(10))
-    latitude: Mapped[Optional[float]] = mapped_column(Float)
-    longitude: Mapped[Optional[float]] = mapped_column(Float)
+    # Link to AWS Cognito identity (populated on first login / registration)
+    cognito_sub: Mapped[Optional[str]] = mapped_column(String(128), unique=True, nullable=True, index=True)
 
-    # Role (from dataset: Bridge Donor / Emergency Donor / Volunteer)
-    role: Mapped[Optional[str]] = mapped_column(String(50))
-    role_status: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Core identity
+    external_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(16))   # "Donor" | "Patient" | "Admin"
+    email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)   # +91XXXXXXXXXX
 
-    # Donor classification
-    donor_type: Mapped[Optional[str]] = mapped_column(String(50))
+    # Demographics (from Dataset.csv)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    age: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    blood_group: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-    # Contact / engagement metrics
-    last_contacted_date: Mapped[Optional[date]] = mapped_column(Date)
-    last_donation_date: Mapped[Optional[date]] = mapped_column(Date)
-    next_eligible_date: Mapped[Optional[date]] = mapped_column(Date)
-    donations_till_date: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    # Donor-specific columns (from Dataset.csv)
+    eligibility_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)   # "eligible" | "not eligible"
+    user_donation_active_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # "Active" | "Inactive"
+    calls_to_donations_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    donations_till_date: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_donation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    next_eligible_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # last_donation + 90 days
+    frequency_in_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    inactive_trigger_comment: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
-    # Eligibility (from dataset: eligible / not eligible)
-    eligibility_status: Mapped[Optional[str]] = mapped_column(String(30))
+    # Patient-specific columns
+    expected_next_transfusion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    transfusion_frequency_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=18)
 
-    # Donor cycle metrics (directly from dataset)
-    cycle_of_donations: Mapped[Optional[int]] = mapped_column(Integer)
-    total_calls: Mapped[Optional[int]] = mapped_column(Integer, default=0)
-    frequency_in_days: Mapped[Optional[int]] = mapped_column(Integer)
-    calls_to_donations_ratio: Mapped[Optional[float]] = mapped_column(Numeric(6, 2))
-
-    # Activity status (Active / Inactive)
-    user_donation_active_status: Mapped[Optional[str]] = mapped_column(String(20))
-    inactive_trigger_comment: Mapped[Optional[str]] = mapped_column(Text)
-
-    # Account status (active / suspended)
-    status: Mapped[str] = mapped_column(String(20), default="active")
-
-    # Phone / email for notification (not in dataset but needed for comms)
-    phone: Mapped[Optional[str]] = mapped_column(String(20))
-    email: Mapped[Optional[str]] = mapped_column(String(120))
-    name: Mapped[Optional[str]] = mapped_column(String(120))
-
-    # Timestamps
-    registration_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    # Account status
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    registration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    bridge_memberships: Mapped[List["BridgeMember"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
+    bridge_memberships: Mapped[list["BridgeMember"]] = relationship(
+        "BridgeMember", foreign_keys="BridgeMember.donor_id", back_populates="donor"
     )
-    transfusion_logs: Mapped[List["TransfusionLog"]] = relationship(
-        back_populates="patient", cascade="all, delete-orphan"
+    patient_bridge: Mapped[Optional["Bridge"]] = relationship(
+        "Bridge", foreign_keys="Bridge.patient_id", back_populates="patient", uselist=False
+    )
+    transfusion_logs: Mapped[list["TransfusionLog"]] = relationship(
+        "TransfusionLog", back_populates="donor", foreign_keys="TransfusionLog.donor_id"
     )
 
 
-# ── Bridge model ──────────────────────────────────────────────────────────────
+# ── Blood Bridge (one per patient, holds 8 donor slots) ──────────────────────
 
 class Bridge(Base):
-    """
-    A Blood Bridge groups a patient with a pool of committed donors.
-    Maps to: bridge_id, bridge_status, bridge_blood_group, bridge_gender,
-             quantity_required columns.
-    """
     __tablename__ = "bridges"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    external_bridge_id: Mapped[str] = mapped_column(String(256), unique=True, nullable=False, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    external_bridge_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
 
-    # Patient this bridge serves
-    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # The patient this bridge serves
+    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
 
-    # Bridge configuration (from dataset)
-    bridge_blood_group: Mapped[Optional[str]] = mapped_column(String(20))
-    bridge_gender: Mapped[Optional[str]] = mapped_column(String(10))
-    quantity_required: Mapped[Optional[int]] = mapped_column(Integer, default=1)
-
-    # Transfusion schedule (from dataset)
-    last_transfusion_date: Mapped[Optional[date]] = mapped_column(Date)
-    expected_next_transfusion_date: Mapped[Optional[date]] = mapped_column(Date)
-
-    # Status flags (from dataset)
+    blood_group_required: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     bridge_status: Mapped[bool] = mapped_column(Boolean, default=True)
-    status_of_bridge: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     # Relationships
-    patient: Mapped["User"] = relationship(foreign_keys=[patient_id])
-    members: Mapped[List["BridgeMember"]] = relationship(
-        back_populates="bridge", cascade="all, delete-orphan"
-    )
-    transfusion_logs: Mapped[List["TransfusionLog"]] = relationship(
-        back_populates="bridge", cascade="all, delete-orphan"
+    patient: Mapped["User"] = relationship("User", foreign_keys=[patient_id], back_populates="patient_bridge")
+    members: Mapped[list["BridgeMember"]] = relationship(
+        "BridgeMember", back_populates="bridge", order_by="BridgeMember.cycle_position"
     )
 
 
-# ── BridgeMember model ────────────────────────────────────────────────────────
+# ── Bridge Member (one of 8 cycle slots) ─────────────────────────────────────
 
 class BridgeMember(Base):
-    """
-    Join table: donor User ↔ Bridge.
-    Captures per-donor metrics that influence the XGBoost ranking model.
-    Maps to: donated_earlier, last_bridge_donation_date, status_of_bridge,
-             user_donation_active_status columns.
-    """
     __tablename__ = "bridge_members"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    bridge_id: Mapped[int] = mapped_column(ForeignKey("bridges.id"), nullable=False)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    bridge_id: Mapped[int] = mapped_column(ForeignKey("bridges.id"))
+    donor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
-    # Whether this donor has donated for this specific bridge before
+    # Position in the 8-person rotation (1-8)
+    cycle_position: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Donation tracking for this slot
     donated_earlier: Mapped[bool] = mapped_column(Boolean, default=False)
-    last_bridge_donation_date: Mapped[Optional[date]] = mapped_column(Date)
+    last_donation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    expected_next_donation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
-    # Ranking score produced by XGBoost (placeholder: populated by /services/ml.py)
-    ml_rank_score: Mapped[Optional[float]] = mapped_column(Float)
+    # Status of this slot
+    slot_status: Mapped[str] = mapped_column(String(16), default="Active")  # Active | Due | Overdue | Inactive
 
-    # Timestamps
-    joined_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     # Relationships
-    bridge: Mapped["Bridge"] = relationship(back_populates="members")
-    user: Mapped["User"] = relationship(back_populates="bridge_memberships")
+    bridge: Mapped["Bridge"] = relationship("Bridge", back_populates="members")
+    donor: Mapped["User"] = relationship("User", foreign_keys=[donor_id], back_populates="bridge_memberships")
 
 
-# ── TransfusionLog model ──────────────────────────────────────────────────────
+# ── Transfusion Log ───────────────────────────────────────────────────────────
 
 class TransfusionLog(Base):
-    """
-    Tracks every completed transfusion event for a patient.
-    Used to compute upcoming transfusion dates and historical patterns.
-    """
     __tablename__ = "transfusion_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    bridge_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bridges.id"))
-    donor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    donor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    bridge_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bridges.id"), nullable=True)
 
-    transfusion_date: Mapped[date] = mapped_column(Date, nullable=False)
-    units: Mapped[int] = mapped_column(Integer, default=1)
-    notes: Mapped[Optional[str]] = mapped_column(Text)
+    transfusion_date: Mapped[date] = mapped_column(Date)
+    blood_units: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hospital: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="completed")
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     # Relationships
-    patient: Mapped["User"] = relationship(
-        foreign_keys=[patient_id], back_populates="transfusion_logs"
-    )
-    bridge: Mapped[Optional["Bridge"]] = relationship(back_populates="transfusion_logs")
+    donor: Mapped[Optional["User"]] = relationship("User", foreign_keys=[donor_id], back_populates="transfusion_logs")
