@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import get_db
-from models import User, RequirementResponse
+from models import User, RequirementResponse, Requirement, Cycle, Bridge, BridgeMember
+from sqlalchemy import func
 
 logger = logging.getLogger("pulsenet")
 
@@ -69,9 +70,52 @@ async def twilio_whatsapp_webhook(
     print(f"Evaluating response: {body_lower}")
     
     if body_lower in ["1", "yes", "confirm", "confirmed"]:
-        req_resp.status = "confirmed"
-        print("STATUS SET TO CONFIRMED")
-        resp.message("Confirmed! Your donation is scheduled. Thank you for being a Blood Warrior!")
+        # Check waitlist logic
+        req = await db.get(Requirement, req_resp.requirement_id)
+        if req and req.cycle_id:
+            cycle = await db.get(Cycle, req.cycle_id)
+            if cycle:
+                expected = cycle.expected_units
+                
+                # Get confirmed count
+                count_res = await db.execute(
+                    select(func.count(RequirementResponse.id))
+                    .where(RequirementResponse.requirement_id == req.id)
+                    .where(RequirementResponse.status == "confirmed")
+                )
+                confirmed_count = count_res.scalar_one_or_none() or 0
+                
+                # Check if donor is a backup
+                bridge_res = await db.execute(
+                    select(Bridge.id).where(Bridge.patient_id == cycle.patient_id)
+                )
+                bridge_id = bridge_res.scalar_one_or_none()
+                
+                is_backup = False
+                if bridge_id:
+                    bm_res = await db.execute(
+                        select(BridgeMember.is_backup)
+                        .where(BridgeMember.bridge_id == bridge_id)
+                        .where(BridgeMember.donor_id == req_resp.donor_id)
+                    )
+                    is_backup = bm_res.scalar_one_or_none() or False
+                
+                if is_backup and confirmed_count >= expected:
+                    req_resp.status = "waitlisted"
+                    print("STATUS SET TO WAITLISTED (Backup Donor limit reached)")
+                    resp.message("Thank you! We already have enough units confirmed for now, but we've placed you on the waitlist in case someone cancels.")
+                else:
+                    req_resp.status = "confirmed"
+                    print("STATUS SET TO CONFIRMED")
+                    resp.message("Confirmed! Your donation is scheduled. Thank you for being a Blood Warrior!")
+            else:
+                req_resp.status = "confirmed"
+                print("STATUS SET TO CONFIRMED")
+                resp.message("Confirmed! Your donation is scheduled. Thank you for being a Blood Warrior!")
+        else:
+            req_resp.status = "confirmed"
+            print("STATUS SET TO CONFIRMED")
+            resp.message("Confirmed! Your donation is scheduled. Thank you for being a Blood Warrior!")
     elif body_lower in ["2", "no", "cancel", "declined"]:
         req_resp.status = "declined"
         resp.message("Understood. We'll update you when needed next. Thank you!")

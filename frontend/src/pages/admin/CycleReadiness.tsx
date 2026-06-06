@@ -119,7 +119,12 @@ function DetailView({ cycle }: { cycle: CycleCard }) {
                     <UserIcon size={16} color="var(--clr-muted)" />
                   </div>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#f1f5f9' }}>{slot.donor_name}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {slot.donor_name}
+                      {slot.is_backup && (
+                        <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(167, 139, 250, 0.2)', color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Backup</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Phone size={10} /> {slot.donor_phone || 'N/A'}</span>
                       {slot.last_donation_date && (

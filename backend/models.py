@@ -127,6 +127,9 @@ class BridgeMember(Base):
 
     # Position in the 8-person rotation (1-8)
     cycle_position: Mapped[int] = mapped_column(Integer, default=1)
+    
+    # Is this donor a backup donor for the pod?
+    is_backup: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Donation tracking for this slot
     donated_earlier: Mapped[bool] = mapped_column(Boolean, default=False)

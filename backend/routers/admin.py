@@ -178,6 +178,7 @@ class DonorSlot(BaseModel):
     expected_next_donation_date: Optional[date]
     slot_status: str
     donated_earlier: bool
+    is_backup: bool = False
     requirement_status: Optional[str] = None
 
 
@@ -1241,6 +1242,7 @@ async def get_bridge_panel(
                 expected_next_donation_date=member.expected_next_donation_date,
                 slot_status=slot_status,
                 donated_earlier=member.donated_earlier,
+                is_backup=member.is_backup,
                 requirement_status=latest_responses.get(donor.id) if donor else None
             ))
 
@@ -1634,7 +1636,7 @@ async def add_backup_donor(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Donor already in pod")
         
-    new_member = BridgeMember(bridge_id=pod_id, donor_id=request.donor_id)
+    new_member = BridgeMember(bridge_id=pod_id, donor_id=request.donor_id, is_backup=True)
     db.add(new_member)
     await db.commit()
     
