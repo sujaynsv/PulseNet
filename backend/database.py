@@ -20,8 +20,8 @@ from config import settings
 
 # ── Engine ────────────────────────────────────────────────────────────────────
 engine = create_async_engine(
-    settings.database_url,
-    echo=settings.env == "development",  # SQL logging in dev only
+    settings.DATABASE_URL,
+    echo=settings.ENV == "development",  # SQL logging in dev only
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,  # recycle stale connections automatically

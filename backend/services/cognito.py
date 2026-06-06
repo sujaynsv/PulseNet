@@ -48,12 +48,19 @@ def create_demo_token(sub: str, email: str, role: Role, settings: Settings) -> s
 # ── Cognito client factory ────────────────────────────────────────────────────
 
 def _cognito_client(settings: Settings):
-    return boto3.client(
-        "cognito-idp",
-        region_name=settings.COGNITO_REGION,
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID or None,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY or None,
-    )
+    import os
+    if "AWS_SESSION_TOKEN" in os.environ and not os.environ["AWS_SESSION_TOKEN"]:
+        os.environ.pop("AWS_SESSION_TOKEN")
+
+    kwargs = {
+        "region_name": settings.COGNITO_REGION,
+        "aws_access_key_id": settings.AWS_ACCESS_KEY_ID or None,
+        "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY or None,
+    }
+    if settings.AWS_SESSION_TOKEN:
+        kwargs["aws_session_token"] = settings.AWS_SESSION_TOKEN
+
+    return boto3.client("cognito-idp", **kwargs)
 
 
 def _get_secret_hash(username: str, client_id: str, client_secret: str) -> str:
@@ -183,11 +190,27 @@ async def cognito_register(
         )
 
         # Assign to the correct group (Admin / Donor / Patient)
-        client.admin_add_user_to_group(
-            UserPoolId=settings.COGNITO_USER_POOL_ID,
-            Username=email,
-            GroupName=role,
-        )
+        try:
+            client.admin_add_user_to_group(
+                UserPoolId=settings.COGNITO_USER_POOL_ID,
+                Username=email,
+                GroupName=role,
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceNotFoundException":
+                logger.warning("Group %s not found in Cognito. Creating it now.", role)
+                client.create_group(
+                    GroupName=role,
+                    UserPoolId=settings.COGNITO_USER_POOL_ID,
+                    Description=f"{role} users group"
+                )
+                client.admin_add_user_to_group(
+                    UserPoolId=settings.COGNITO_USER_POOL_ID,
+                    Username=email,
+                    GroupName=role,
+                )
+            else:
+                raise
 
         logger.info("Cognito user created: %s (sub=%s, role=%s)", email, sub, role)
         return sub

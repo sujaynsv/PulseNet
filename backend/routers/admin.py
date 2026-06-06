@@ -33,12 +33,15 @@ router = APIRouter()
 # ── Response schemas ──────────────────────────────────────────────────────────
 
 class DashboardStats(BaseModel):
+    total_users: int
     total_donors: int
     total_patients: int
+    total_bridges: int
     active_bridges: int
     eligible_donors: int
     active_donors: int
     inactive_donors: int
+    donor_fatigue_risk: int
     as_of: str
 
 
@@ -130,13 +133,20 @@ async def dashboard_stats(
         )
     )).scalar_one()
 
+    total_bridges = (await db.execute(
+        select(func.count(Bridge.id))
+    )).scalar_one()
+
     return DashboardStats(
+        total_users=total_donors + total_patients,
         total_donors=total_donors,
         total_patients=total_patients,
+        total_bridges=total_bridges,
         active_bridges=active_bridges,
         eligible_donors=eligible_donors,
         active_donors=active_donors,
         inactive_donors=inactive_donors,
+        donor_fatigue_risk=inactive_donors, # placeholder logic
         as_of=date.today().isoformat(),
     )
 
@@ -173,6 +183,31 @@ async def list_patients(
         ))
     return summaries
 
+
+@router.get("/bridge/mock")
+async def get_mock_bridge_panel(_admin: AdminUser):
+    """Mock ML ranked bridge for the demo dashboard."""
+    donors = []
+    for i in range(1, 9):
+        donors.append({
+            "external_id": f"mock-{i}",
+            "name": f"Mock Donor {i}",
+            "blood_group": "O+",
+            "distance_km": round(1.5 * i, 1),
+            "donations_till_date": 5 - i if i < 5 else 0,
+            "eligibility_status": "eligible" if i < 6 else "inactive",
+            "ml_rank_score": max(0.99 - (i * 0.05), 0.1)
+        })
+    return {
+        "patient": {
+            "name": "Sarah (ML Demo)",
+            "blood_group": "O+",
+            "next_transfusion_date": (date.today() + timedelta(days=5)).isoformat()
+        },
+        "model_used": "xgboost-v2",
+        "generated_at": date.today().isoformat(),
+        "ranked_donors": donors
+    }
 
 @router.get("/bridge/{patient_id}", response_model=BridgePanelResponse)
 async def get_bridge_panel(

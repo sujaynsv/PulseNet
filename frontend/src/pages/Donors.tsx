@@ -4,8 +4,11 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { Users, RefreshCw } from 'lucide-react'
-import { fetchEligibleDonors, fetchInactiveDonors } from '@/lib/api'
-import type { UserRead } from '@/lib/api'
+import { api } from '@/lib/api'
+type UserRead = any;
+
+const fetchEligibleDonors = () => api.get('/api/admin/donors/eligible').then(res => res.data);
+const fetchInactiveDonors = () => api.get('/api/admin/donors/inactive').then(res => res.data);
 
 function DonorCard({ donor }: { donor: UserRead }) {
   const active = donor.user_donation_active_status === 'Active'
@@ -58,7 +61,7 @@ export function Donors() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {eligible.isLoading
               ? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 80 }} />)
-              : eligible.data?.map(d => <DonorCard key={d.id} donor={d} />)}
+              : eligible.data?.map((d: any) => <DonorCard key={d.id} donor={d} />)}
           </div>
         </div>
 
@@ -73,7 +76,7 @@ export function Donors() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {inactive.isLoading
               ? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 80 }} />)
-              : inactive.data?.map(d => <DonorCard key={d.id} donor={d} />)}
+              : inactive.data?.map((d: any) => <DonorCard key={d.id} donor={d} />)}
           </div>
         </div>
       </div>

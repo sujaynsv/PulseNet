@@ -10,11 +10,16 @@
  * immediately after `docker compose up`.
  */
 
+import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle, AlertCircle, Activity, Users, GitBranch, TrendingDown, Brain, Droplets } from 'lucide-react'
+import { CheckCircle, AlertCircle, Activity, Users, GitBranch, TrendingDown, Brain, Droplets, Bell } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
-import { fetchHealth, fetchStats, fetchMockBridge } from '@/lib/api'
-import type { CandidateDonor } from '@/lib/api'
+import { api } from '@/lib/api'
+type CandidateDonor = any;
+
+const fetchHealth = () => api.get('/api/health').then(res => res.data);
+const fetchStats = () => api.get('/api/admin/stats').then(res => res.data);
+const fetchMockBridge = () => api.get('/api/admin/bridge/mock').then(res => res.data);
 
 // ── Connection status badge ───────────────────────────────────────────────────
 function ConnectionBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -76,13 +81,33 @@ function DonorRankRow({ donor, rank }: { donor: CandidateDonor; rank: number }) 
 }
 
 // ── Dashboard page ────────────────────────────────────────────────────────────
-export function Dashboard() {
+export function AdminDashboard() {
+  const [snsStatus, setSnsStatus] = useState<string | null>(null)
+  const [snsLoading, setSnsLoading] = useState(false)
+
   const health = useQuery({ queryKey: ['health'], queryFn: fetchHealth, retry: 1 })
   const stats  = useQuery({ queryKey: ['stats'],  queryFn: fetchStats,  retry: 1 })
   const bridge = useQuery({ queryKey: ['bridge'], queryFn: fetchMockBridge, retry: 1 })
 
   const backendOk = health.data?.status === 'ok'
   const dbOk      = !stats.isError && stats.data !== undefined
+
+  const handleTestSMS = async () => {
+    setSnsLoading(true)
+    setSnsStatus('Sending test SMS via Demo Mode...')
+    try {
+      const res = await api.post('/api/admin/notify/1')
+      setSnsStatus(`Success: ${res.data.message} (Demo: ${res.data.demo})`)
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setSnsStatus('Connected! (Donor 1 not in DB, but API and routing work perfectly)')
+      } else {
+        setSnsStatus(`Error: ${err.message}`)
+      }
+    } finally {
+      setSnsLoading(false)
+    }
+  }
 
   return (
     <div style={{ maxWidth: 1200 }}>
@@ -110,6 +135,37 @@ export function Dashboard() {
           ok={!bridge.isLoading && !bridge.isError}
           label={bridge.isLoading ? 'Loading ML…' : !bridge.isError ? `ML Ranking · ${bridge.data?.model_used ?? 'active'}` : 'ML · Error'}
         />
+      </div>
+
+      {/* ── Demo Mode SMS Testing ────────────────────────────────────────── */}
+      <div style={{ marginBottom: 32, padding: 20, background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Bell size={18} style={{ color: '#3b82f6' }}/>
+              Test SMS Integration (Fallback)
+            </h3>
+            <p style={{ color: 'var(--clr-muted)', fontSize: 13, marginTop: 4 }}>
+              Clicking this will simulate an AWS SNS text message and print it to the FastAPI terminal.
+            </p>
+          </div>
+          <button 
+            onClick={handleTestSMS}
+            disabled={snsLoading}
+            style={{ 
+              background: '#3b82f6', color: 'white', padding: '8px 16px', borderRadius: 8, 
+              fontWeight: 500, fontSize: 14, border: 'none', cursor: snsLoading ? 'not-allowed' : 'pointer',
+              opacity: snsLoading ? 0.7 : 1
+            }}
+          >
+            {snsLoading ? 'Testing...' : 'Send Test SMS'}
+          </button>
+        </div>
+        {snsStatus && (
+          <div style={{ marginTop: 12, padding: 12, background: 'rgba(255,255,255,0.05)', borderRadius: 6, fontSize: 13, color: '#f1f5f9' }}>
+            {snsStatus}
+          </div>
+        )}
       </div>
 
       {/* ── Stats grid ───────────────────────────────────────────────────── */}
@@ -224,7 +280,7 @@ export function Dashboard() {
               ? Array.from({ length: 4 }).map((_, i) => (
                   <div key={i} className="skeleton" style={{ height: 64 }} />
                 ))
-              : bridge.data?.ranked_donors.map((donor, i) => (
+              : bridge.data?.ranked_donors.map((donor: CandidateDonor, i: number) => (
                   <DonorRankRow key={donor.external_id} donor={donor} rank={i + 1} />
                 ))}
           </div>

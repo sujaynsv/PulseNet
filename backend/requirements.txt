@@ -23,3 +23,5 @@ numpy==1.26.4
 # Utilities
 python-multipart==0.0.9
 python-dateutil==2.9.0.post0
+eval_type_backport==0.2.0
+greenlet==3.0.3
