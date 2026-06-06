@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
-import { AuthProvider } from './contexts/AuthContext'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
@@ -21,6 +21,16 @@ function AppLayout({ children }: { children: React.ReactNode }) {
       </main>
     </div>
   )
+}
+
+function RootRedirect() {
+  const { user, role, isLoading } = useAuth();
+  if (isLoading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (role === 'Admin') return <Navigate to="/admin" replace />;
+  if (role === 'Donor') return <Navigate to="/donor" replace />;
+  if (role === 'Patient') return <Navigate to="/patient" replace />;
+  return <Navigate to="/login" replace />;
 }
 
 function App() {
@@ -49,7 +59,7 @@ function App() {
             </Route>
 
             {/* Redirect root based on login status / role */}
-            <Route path="/" element={<ProtectedRoute />} />
+            <Route path="/" element={<RootRedirect />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </BrowserRouter>
