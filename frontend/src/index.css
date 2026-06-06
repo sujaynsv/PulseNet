@@ -5,12 +5,11 @@
    Fonts: Space Grotesk (display) + Inter (body)
    ────────────────────────────────────────────────────────────────────────── */
 
+@import 'leaflet/dist/leaflet.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* ── Leaflet Map CSS ─────────────────────────────────────────────────────── */
-@import 'leaflet/dist/leaflet.css';
 
 /* Custom Leaflet tooltip for PulseNet dark theme */
 .pulsenet-tooltip {
