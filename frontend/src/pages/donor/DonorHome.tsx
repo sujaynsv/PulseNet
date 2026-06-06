@@ -264,6 +264,35 @@ export function DonorHome() {
   const isCooldown = profile?.eligibility_status === 'not eligible';
   const isInactive = profile?.status === 'inactive';
 
+  // Gamification Logic
+  const donations = impact?.total_donations || 0;
+  let currentBadge = 'Starter';
+  let nextBadge = 'Bronze Warrior';
+  let nextBadgeGoal = 1;
+  let badgeColor = 'text-slate-400';
+
+  if (donations >= 5) {
+    currentBadge = 'Gold Guardian';
+    nextBadge = 'Platinum Hero';
+    nextBadgeGoal = 10;
+    badgeColor = 'text-yellow-400';
+  } else if (donations >= 3) {
+    currentBadge = 'Silver Savior';
+    nextBadge = 'Gold Guardian';
+    nextBadgeGoal = 5;
+    badgeColor = 'text-slate-300';
+  } else if (donations >= 1) {
+    currentBadge = 'Bronze Warrior';
+    nextBadge = 'Silver Savior';
+    nextBadgeGoal = 3;
+    badgeColor = 'text-amber-600';
+  }
+
+  const progressPercent = Math.min((donations / nextBadgeGoal) * 100, 100);
+  const progRadius = 24;
+  const progCircumference = 2 * Math.PI * progRadius;
+  const progOffset = progCircumference - (progressPercent / 100) * progCircumference;
+
   return (
     <div className="max-w-5xl mx-auto p-4 md:p-8 space-y-8">
       
@@ -493,10 +522,14 @@ export function DonorHome() {
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-white">{impact?.total_donations || 0}</div>
+                <div className="text-2xl font-bold text-white">{donations}</div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-1">Total Donations</div>
+              </div>
+              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-center">
+                <div className="text-2xl font-bold text-red-500">{donations * 3}</div>
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-1">Lives Saved</div>
               </div>
               <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-center">
                 <div className="text-2xl font-bold text-white">{impact?.cycles_supported || 0}</div>
@@ -505,6 +538,37 @@ export function DonorHome() {
               <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-center">
                 <div className="text-2xl font-bold text-amber-500">{impact?.emergencies_responded || 0}</div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-1">Emergencies</div>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-br from-slate-800/50 to-slate-900/80 border border-slate-700/50 rounded-xl p-6 mb-8 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-slate-950 flex items-center justify-center border-2 border-slate-700 shadow-inner">
+                  <Award className={badgeColor} size={24} />
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Current Rank</div>
+                  <div className={`text-xl font-bold ${badgeColor}`}>{currentBadge}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 text-right">
+                <div className="hidden sm:block">
+                  <div className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Next Badge</div>
+                  <div className="text-sm font-bold text-slate-300">{nextBadge} ({donations}/{nextBadgeGoal})</div>
+                </div>
+                <div className="relative w-14 h-14 flex-shrink-0">
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 60 60">
+                    <circle className="text-slate-800 stroke-current" strokeWidth="4" cx="30" cy="30" r={progRadius} fill="transparent" />
+                    <circle 
+                      className={`text-red-500 stroke-current transition-all duration-1000 ease-in-out`} 
+                      strokeWidth="4" strokeLinecap="round" cx="30" cy="30" r={progRadius} fill="transparent" 
+                      strokeDasharray={progCircumference} strokeDashoffset={progOffset} 
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-xs font-bold text-white">{Math.round(progressPercent)}%</span>
+                  </div>
+                </div>
               </div>
             </div>
 
