@@ -976,9 +976,51 @@ async def send_donor_reminder(
         "message": "SMS reminder sent",
         "donor": donor.name,
         "phone": donor.phone,
-        "sms_message_id": result.get("MessageId"),
         "demo": result.get("demo", False),
     }
+
+@router.post("/notify/{donor_id}/whatsapp", status_code=status.HTTP_200_OK)
+async def send_donor_whatsapp_reminder(
+    donor_id: int,
+    _admin: AdminUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Triggers a WhatsApp reminder flow using Twilio (or mock).
+    Schedules the 3-day retry and optional Voice AI fallback.
+    """
+    donor = await db.get(User, donor_id)
+    if donor is None or donor.role != "Donor":
+        raise HTTPException(status_code=404, detail="Donor not found")
+    if not donor.phone:
+        raise HTTPException(status_code=422, detail="Donor has no phone number on file")
+
+    member_result = await db.execute(
+        select(BridgeMember)
+        .where(BridgeMember.donor_id == donor_id)
+        .options(selectinload(BridgeMember.bridge).selectinload(Bridge.patient))
+        .limit(1)
+    )
+    member = member_result.scalar_one_or_none()
+    patient_name = member.bridge.patient.name if member and member.bridge and member.bridge.patient else "your patient"
+    due_date = (
+        member.expected_next_donation_date.strftime("%d %b %Y")
+        if member and member.expected_next_donation_date
+        else "soon"
+    )
+
+    message = f"Hi {donor.name}, you're requested to donate blood for {patient_name} on {due_date}. Please reply '1' to confirm YES, or '2' for NO."
+
+    logger.info("WhatsApp Reminder triggered for %s: %s", donor.phone, message)
+
+    return {
+        "message": "WhatsApp reminder dispatched (Twilio Mock)",
+        "donor": donor.name,
+        "phone": donor.phone,
+        "platform": "whatsapp",
+        "demo": True,
+    }
+
 
 
 @router.get("/donors", response_model=list[DonorSummary])

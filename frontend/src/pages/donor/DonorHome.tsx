@@ -464,8 +464,20 @@ export function DonorHome() {
                   </button>
                 </div>
               ) : (
-                <div className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                  <CheckCircle size={18} className="text-green-500" /> Response Recorded
+                <div className="text-sm font-semibold flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <CheckCircle size={18} className="text-green-500" /> Response Recorded
+                  </div>
+                  {req.my_response_status === 'confirmed' && (
+                    <div className="text-green-400 text-xs mt-1 bg-green-950/30 px-3 py-1.5 rounded-md border border-green-900/50">
+                      Confirmed! Your donation is scheduled for {new Date(req.date_needed).toLocaleDateString()}.
+                    </div>
+                  )}
+                  {req.my_response_status === 'declined' && (
+                    <div className="text-slate-400 text-xs mt-1 bg-slate-900/50 px-3 py-1.5 rounded-md border border-slate-800">
+                      Declined. We will update you when needed for future slots.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

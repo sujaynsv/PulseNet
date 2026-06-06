@@ -5,8 +5,8 @@
  */
 
 import React, { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Clock, AlertTriangle, CheckCircle, Zap, Droplets } from 'lucide-react'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, ChevronDown, ChevronUp, Phone, User as UserIcon } from 'lucide-react'
 import { api } from '@/lib/api'
 
 type CycleCard = {
@@ -30,10 +30,26 @@ const STATE_CFG = {
   critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.2)',  icon: <Zap size={14} />, label: 'Critical' },
 }
 
+const fetchBridge = (patientId: number) =>
+  api.get(`/api/admin/bridge/${patientId}`).then(r => r.data)
+
 function CycleCardView({ card }: { card: CycleCard }) {
+  const [expanded, setExpanded] = useState(false)
   const cfg = STATE_CFG[card.state]
   const isToday = card.days_until === 0
   const isTomorrow = card.days_until === 1
+
+  const { data: bridge, isLoading: isLoadingBridge } = useQuery({
+    queryKey: ['bridge', card.patient_id],
+    queryFn: () => fetchBridge(card.patient_id),
+    enabled: expanded,
+  })
+
+  const notifyMutation = useMutation({
+    mutationFn: (donorId: number) => api.post(`/api/admin/notify/${donorId}/whatsapp`),
+    onSuccess: (data) => alert(data.data.message),
+    onError: () => alert('Failed to send WhatsApp reminder'),
+  })
 
   return (
     <div style={{
@@ -77,7 +93,7 @@ function CycleCardView({ card }: { card: CycleCard }) {
       </div>
 
       {/* Metrics row */}
-      <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginBottom: expanded ? 16 : 0 }}>
         {/* Confidence gauge */}
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
@@ -94,7 +110,70 @@ function CycleCardView({ card }: { card: CycleCard }) {
           <Droplets size={14} style={{ color: '#C0191C' }} />
           <span><strong style={{ color: '#f1f5f9' }}>{card.expected_units}</strong> units</span>
         </div>
+        
+        <button 
+          onClick={() => setExpanded(!expanded)}
+          style={{ background: 'transparent', border: 'none', color: 'var(--clr-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+        >
+          {expanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+        </button>
       </div>
+
+      {/* Expanded Bridge Details */}
+      {expanded && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16, marginTop: 16 }}>
+          <h4 style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Blood Bridge Team
+          </h4>
+          
+          {isLoadingBridge ? (
+            <div style={{ fontSize: 12, color: 'var(--clr-muted)' }}>Loading donors...</div>
+          ) : !bridge || bridge.slots.filter((s: any) => s.donor_id).length === 0 ? (
+            <div style={{ fontSize: 12, color: '#f59e0b' }}>No donors mapped to this bridge yet.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {bridge.slots.filter((s: any) => s.donor_id).map((slot: any) => (
+                <div key={slot.slot_id} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+                  padding: '10px 14px', borderRadius: 8
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ background: 'rgba(0,0,0,0.3)', width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <UserIcon size={14} color="var(--clr-muted)" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>{slot.donor_name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--clr-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Phone size={10} /> {slot.donor_phone || 'N/A'}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: slot.slot_status === 'Active' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: slot.slot_status === 'Active' ? '#22c55e' : '#f59e0b' }}>
+                      {slot.slot_status}
+                    </span>
+                    
+                    <button
+                      disabled={notifyMutation.isPending}
+                      onClick={() => notifyMutation.mutate(slot.donor_id)}
+                      style={{
+                        background: '#25D366', color: '#fff', border: 'none',
+                        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                        display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+                        opacity: notifyMutation.isPending ? 0.6 : 1
+                      }}
+                    >
+                      <MessageCircle size={14} /> WhatsApp
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
