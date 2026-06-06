@@ -195,3 +195,39 @@ class RequirementResponse(Base):
     donor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, confirmed, declined
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── Emergency Case (Full resolution workflow tracker) ─────────────────────────
+
+class EmergencyCase(Base):
+    __tablename__ = "emergency_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    # Patient info
+    patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    patient_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # masked or name
+    blood_group: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    center_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    units_needed: Mapped[int] = mapped_column(Integer, default=2)
+    time_critical_by: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Assigned donor (optional)
+    assigned_donor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    # 5-step resolution checklist
+    donor_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+    donor_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    center_informed: Mapped[bool] = mapped_column(Boolean, default=False)
+    units_arranged: Mapped[bool] = mapped_column(Boolean, default=False)
+    case_closed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Overall status: open | partially_covered | closed
+    status: Mapped[str] = mapped_column(String(32), default="open")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    patient: Mapped[Optional["User"]] = relationship("User", foreign_keys=[patient_id])
+    assigned_donor: Mapped[Optional["User"]] = relationship("User", foreign_keys=[assigned_donor_id])

@@ -7,10 +7,14 @@ import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { AdminDashboard } from './pages/admin/AdminDashboard'
 import { PatientsList } from './pages/admin/PatientsList'
+import { PatientDetails } from './pages/admin/PatientDetails'
+import { PodCentre } from './pages/admin/PodCentre'
+import { CycleReadiness } from './pages/admin/CycleReadiness'
+import { EmergencyBoard } from './pages/admin/EmergencyBoard'
+import { CenterStress } from './pages/admin/CenterStress'
 import { DonorHome } from './pages/donor/DonorHome'
 import { PatientHome } from './pages/patient/PatientHome'
 import { PatientProfile } from './pages/patient/PatientProfile'
-import { PatientDetails } from './pages/admin/PatientDetails'
 
 const queryClient = new QueryClient()
 
@@ -39,6 +43,10 @@ function App() {
               <Route path="/admin" element={<AppLayout><AdminDashboard /></AppLayout>} />
               <Route path="/admin/patients" element={<AppLayout><PatientsList /></AppLayout>} />
               <Route path="/admin/patients/:id" element={<AppLayout><PatientDetails /></AppLayout>} />
+              <Route path="/admin/pods" element={<AppLayout><PodCentre /></AppLayout>} />
+              <Route path="/admin/cycles" element={<AppLayout><CycleReadiness /></AppLayout>} />
+              <Route path="/admin/emergencies" element={<AppLayout><EmergencyBoard /></AppLayout>} />
+              <Route path="/admin/centers" element={<AppLayout><CenterStress /></AppLayout>} />
             </Route>
 
             {/* Donor Routes */}
