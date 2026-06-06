@@ -1,267 +1,288 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
-
-# give me the md file for this feature
-
-Here’s a ready-to-use `donor_pod_assignment.md` file for that feature.
+Here’s a detailed spec you can treat as `docs/ui/donor_dashboard.md` for your dev agents.
 
 ***
 
-# Donor-to-Pod Assignment (PulseNet Matching Rules)
+# Donor Dashboard (PulseNet – Donor Flow)
 
-## Overview
+## Purpose
 
-Once a donor completes their profile, PulseNet must **assign or suggest** them to the **best-fit Blood Bridge pod** instead of leaving them unlinked.
-Each pod represents a thalassemia patient in Hyderabad with a target of **8–10 aligned donors** in their Blood Bridge.
+The Donor Dashboard is the **main home screen** for a donor after onboarding.  
+Instead of a static profile page, it shows:
 
-This document defines the data, matching rules, and behaviours for that assignment.
+- Their key info (in a compact header)
+- Their current Blood Bridge pod and patient context
+- Upcoming donation opportunities
+- Impact and history
+- Settings they care about (availability, notification prefs, languages)
 
-***
-
-## Data Model
-
-### Donor Profile (`donor`)
-
-Mandatory fields:
-
-- `donor_id` (UUID)
-- `name`
-- `blood_group` (e.g., O+, B−)
-- `city` (e.g., Hyderabad)
-- `area` / `pincode`
-- `preferred_days` (enum/list: weekdays, weekends, specific days)
-- `preferred_times` (enum/list: mornings, afternoons, evenings)
-- `travel_radius_km` (int)
-- `last_donation_date` (date, nullable)
-- `languages` (list)
-- `status` (active, inactive, unassigned_available)
-
-
-### Patient Pod (`pod`)
-
-- `pod_id` (UUID)
-- `patient_id`
-- `patient_blood_group`
-- `city` (Hyderabad)
-- `treatment_center_location` (lat/long or structured address)
-- `cycle_day_pattern` (e.g., every 3 weeks, typical day = Tuesday)
-- `current_pod_size` (0–10)
-- `active_donors_count`
-- `pod_health_score` (0–100)
-- `status` (active, paused)
-
-
-### Donor–Pod Link (`donor_pod`)
-
-- `donor_pod_id` (UUID)
-- `donor_id`
-- `pod_id`
-- `role` (primary, backup)
-- `assigned_at` (timestamp)
-- `status` (active, removed)
+The goal is: **“I know who I’m helping, when I’m needed next, how I’m doing, and I can control how and when you contact me.”**
 
 ***
 
-## Assignment Flow
+## Page Structure (High-Level)
 
-### Trigger
-
-- Event: `donor_profile_completed`
-- Source: Donor finishes onboarding (web or WhatsApp).
-
-System runs `assign_donor_to_pod(donor_id)` asynchronously.
-
-***
-
-## Step 1 — Filter Candidate Pods
-
-1. **City match**
-    - `pod.city == donor.city` (Hyderabad only, for now).
-2. **Blood compatibility**
-    - `patient_blood_group` compatible with `donor_blood_group`.
-    - For now, use exact match + simple compatibility matrix (expand later if needed).
-3. **Pod capacity**
-    - `pod.current_pod_size < 10`.
-4. **Distance constraint**
-    - `distance(donor.area, pod.treatment_center_location) <= donor.travel_radius_km`.
-
-All pods that pass these filters become **candidate pods**.
-
-If `candidate_pods` is empty → go to **Fallback**.
+1. **Top bar / app bar**
+2. **Donor Summary Header** (readable snapshot)
+3. **Upcoming Donation Panel**
+4. **Blood Bridge Pod Panel**
+5. **Impact & History Panel**
+6. **Preferences & Settings**
+7. **Footer / Help & Support**
 
 ***
 
-## Step 2 — Score Candidate Pods
+## 1. Top Bar / App Bar
 
-For each `candidate_pod`, compute a `pod_score`.
+**Elements**
 
-### Components
+- App name: `PulseNet | Blood Warriors`
+- City indicator: `Hyderabad`
+- Icon/button: `Help` (opens help / WhatsApp support link)
+- Optional: Sign out icon
 
-- `blood_match_score`
-    - Exact blood group match = 1.0
-    - Compatible but not exact (e.g., O− → many) = lower weight (e.g., 0.7).
-- `proximity_score`
-    - Normalize distance to 0–1 range; closer center = higher score.
-- `availability_overlap_score`
-    - Compare `donor.preferred_days/times` vs `pod.cycle_day_pattern`.
-    - Higher score if donor’s preferences align with typical transfusion days.
-- `pod_need_score`
-    - Higher when:
-        - `pod.current_pod_size` is low.
-        - `pod.active_donors_count` is low.
-        - `pod.pod_health_score` is low.
-
-
-### Example formula (rule-based v1)
-
-$$
-pod\_score = w_1 \cdot blood\_match\_score + w_2 \cdot proximity\_score + w_3 \cdot availability\_overlap\_score + w_4 \cdot pod\_need\_score
-$$
-
-Where `w_1 … w_4` are weights (tune later; default equal weights).
+No heavy logic here; just consistent branding + quick access to support.
 
 ***
 
-## Step 3 — Select Best Pod
+## 2. Donor Summary Header
 
-- Sort `candidate_pods` by `pod_score` descending.
-- Let `best_pod` be the first entry.
-- If there is a tie, prefer:
-    - Pod with lower `current_pod_size`.
-    - Then pod with lower `pod_health_score`.
+**Goal**: Show the donor their identity and status in one glance.
+
+### Fields Displayed
+
+- Donor name: `Ravi Kumar`
+- Donor ID: `DW-12345`
+- Blood group badge: `B+`
+- City: `Hyderabad`
+- Status chip:
+  - `ACTIVE`
+  - `ON COOLDOWN` (with “eligible from [date]”)
+  - `INACTIVE` (if they paused participation)
+- Last donation:
+  - `Last donation: 12 May 2026 at [Center Name]`
+- Next eligibility:
+  - `Eligible from: 11 July 2026`
+
+### Actions
+
+- **Edit Info** (button)
+  - Opens side panel or modal:
+    - Editable:
+      - Name
+      - Area/pincode
+      - Travel radius
+      - Languages
+    - Non-editable by default:
+      - Blood group (change requires admin)
+- **Pause participation** (toggle)
+  - `I need a break` → sets status to `INACTIVE`, reduces outreach
+  - Reason dropdown: `Health`, `Travel`, `Busy`, `Other`
+
+**Backend Dependencies**
+
+- `GET /donor/{id}`
+- `PATCH /donor/{id}` for updates
+- `PATCH /donor/{id}/status` to pause/activate
 
 ***
 
-## Step 4 — Assignment Behaviour
+## 3. Upcoming Donation Panel
 
-### Auto-Assign Mode (Default)
+**Title**: `Your Next Opportunity`
 
-- Precondition:
-    - Donor has **no existing primary pod**.
+### Display Logic
 
-Actions:
+- If donor is **eligible** and assigned to a pod with an upcoming cycle:
+  - Show:
+    - `Next cycle: 14 June 2026`
+    - `Patient location: [Center Name, Hyderabad]`
+    - `Time window: 9:00–12:00`
+    - Status chip:
+      - `REQUESTED` (system has invited donor)
+      - `CONFIRMED` (donor has accepted)
+      - `DECLINED` (they declined)
+- If donor is **on cooldown**:
+  - Show:
+    - `You’re on a short break until [eligible_from_date].`
+    - `We’ll reach out after this date.`
+- If donor has no assigned pod:
+  - Show:
+    - `We’re matching you to a fighter in Hyderabad.`
+    - `You’ll be notified as soon as your Blood Bridge pod is ready.`
 
-1. Insert row in `donor_pod`:
-    - `donor_id`
-    - `pod_id = best_pod.pod_id`
-    - `role = "primary"`
-    - `assigned_at = now()`
-    - `status = "active"`
-2. Update pod:
-    - `current_pod_size += 1`
-    - Recalculate `pod_health_score`.
-3. Notify donor:
-    - Channel: WhatsApp/SMS.
-    - Content (example):
-> “You’ve joined a Blood Bridge pod for a fighter at [Center Name] in Hyderabad. Their cycles usually fall on [Day/Time]. We’ll reach out before each cycle if you’re eligible.”
-4. Log event:
-    - `donor_assigned_to_pod` event stored for audit and analytics.
+### Actions
 
-### Human-in-the-Loop Mode (Optional)
+- **Confirm participation** (`I can donate this cycle`)
+  - Confirms for the next upcoming cycle.
+  - Backend: `POST /donor/{id}/confirm-cycle` with `cycle_id`.
+- **Can’t come this time** (`I can’t make it`)
+  - Declines, triggers auto-escalation to next donor in pod.
+  - Prompt for reason (optional): `Health`, `Travel`, `Work`, `Other`.
+  - Backend: `POST /donor/{id}/decline-cycle`.
+- **Request another time** (`Suggest another day/time`)
+  - Opens small form:
+    - Alternative day/time within allowed window.
+  - Backend: `POST /donor/{id}/reschedule-suggestion`.
 
-- System generates **top 3** pods with:
+***
+
+## 4. Blood Bridge Pod Panel
+
+**Title**: `Your Blood Bridge Pod`
+
+### Display Elements
+
+- Patient context (anonymized):
+  - `You are part of a support circle for a fighter at [Center Name], Hyderabad.`
+  - `Cycles: about every [X] weeks.`
+- Pod members summary (no full names; privacy-safe):
+  - `You + 7 other donors`
+  - Small chips: `Donor A`, `Donor B`, `Donor C`, etc. with `Active`/`Sleeping` icons.
+- Pod health indicator:
+  - Simple label: `Pod Status: Strong / Stable / Needs You`
+  - Derived from pod health score, but simplified.
+
+### Actions
+
+- **View details (optional)**:
+  - Expanded view shows:
+    - Approximate cycle pattern (e.g., “Every 3rd Tuesday”)
+    - How many donors are currently active vs sleeping
+- No ability to see exact other donors’ personal data — only status and count.
+
+**Backend**
+
+- `GET /donor/{id}/pod`
+  - returns:
     - `pod_id`
-    - `score`
-    - Reason (e.g., “Closest center, pod has only 4 donors”).
-- Admin UI:
-    - Shows suggested pods.
-    - Coordinator picks 1 (or overrides to a different pod).
-- Backend:
-    - On approval → same insert/update/notify as auto-assign.
+    - `center`
+    - `cycle_pattern`
+    - `pod_size`
+    - `active_donor_count`
+    - `pod_status_label`
 
 ***
 
-## Fallbacks \& Edge Cases
+## 5. Impact & History Panel
 
-### No Eligible Pod Found
+**Title**: `Your Impact`
 
-If `candidate_pods` is empty:
+### Info to Show
 
-- Update donor:
-    - `donor.status = "unassigned_available"`.
-- Add to “Unassigned Donors (Hyderabad)” admin list.
-- Admin can:
-    - Use these donors when creating a new patient pod.
-    - Use them to refill very weak pods.
+- Counters:
+  - `Total donations: 7`
+  - `Total cycles supported: 5`
+  - `Emergencies responded: 2`
+- Recent history timeline:
+  - Entries like:
+    - `12 May 2026 – Donated at [Center Name] – Supported Cycle 3`
+    - `20 March 2026 – Emergency donation – Hyderabad`
+- Optional: simple badge/rank
+  - `Status: Blood Warrior (Level 2)`
 
+### Actions
 
-### Donor Already in a Pod
+- **Download acknowledgement** (if Blood Warriors issues certificates)
+  - `Download certificate for last donation` → PDF.
 
-Rules:
+**Backend**
 
-- Each donor can have:
-    - **1 primary pod** (main patient).
-    - **0–1 backup pods** (emergency / shared capacity).
-
-When `assign_donor_to_pod` runs:
-
-- If donor has no primary pod → assign as primary.
-- If donor has primary but no backup → assign `role = "backup"` if needed for a high-risk patient.
-- If donor already has primary + backup:
-    - Do not auto-assign.
-    - Keep donor in **city-wide emergency pool** only.
-
-
-### Donor Profile Update
-
-If donor updates:
-
-- area, travel radius, preferred days/times
-
-You may optionally run:
-
-- `recompute_best_pod(donor_id)` and suggest moving pods (admin approval required), or
-- only apply changes for future outreach without moving existing pod assignments (simpler).
+- `GET /donor/{id}/impact`
+  - `total_donations`
+  - `cycles_supported`
+  - `emergencies`
+  - `history[]` with `date`, `center`, `type`.
 
 ***
 
-## Future: Model-Based Matching
+## 6. Preferences & Settings
 
-The above is rule-based v1. Later, you can replace the scoring with a small ML model (SageMaker):
+**Title**: `Your Preferences`
 
-- **Input features**
-    - Donor blood group, distance, availability
-    - Pod health metrics
-    - Donor past response patterns
-- **Output**
-    - Probability of this donor accepting + showing up for this pod.
+### Sections
 
-Then, `best_pod = argmax(p_accept_show_up)`.
+1. **Contact Preferences**
+   - Checkboxes/toggles:
+     - `WhatsApp` (default on)
+     - `SMS`
+     - `Phone call`
+     - `Email` (if available)
+   - Backend: `PATCH /donor/{id}/preferences/contact`.
 
-***
+2. **Availability Settings**
+   - Day chips:
+     - `Mon … Sun`
+   - Time slots:
+     - `Morning (6–12)`, `Afternoon (12–5)`, `Evening (5–9)`
+   - Travel radius slider:
+     - `0–5 km`, `5–10 km`, `10–20 km`, `City-wide`
+   - Backend: `PATCH /donor/{id}/preferences/availability`.
 
-## API Sketch (for Devs)
+3. **Language & UI**
+   - `Preferred language`: `English`, `Telugu`, `Hindi` (multi-select possible).
+   - This informs WhatsApp bot / SMS language.
+   - Backend: `PATCH /donor/{id}/preferences/language`.
 
-```http
-POST /matching/assign-donor
-Body:
-{
-  "donor_id": "UUID"
-}
-
-Response:
-{
-  "status": "assigned",
-  "pod_id": "UUID",
-  "role": "primary",
-  "mode": "auto" | "pending_admin_approval"
-}
-```
-
-Error / fallback:
-
-```json
-{
-  "status": "no_eligible_pod",
-  "donor_status": "unassigned_available"
-}
-```
-
+4. **Health / Medical Notes (optional)**
+   - Safe text input where donor can add:
+     - `Doctor advised max X donations per year`, etc.
+   - Flag: `requires_admin_review` if changed.
+   - Backend: `PATCH /donor/{id}/notes`.
 
 ***
 
-This file should live as something like:
+## 7. Footer / Help & Support
 
-`docs/matching/donor_pod_assignment.md`
+- **FAQ link**: “What if I can’t donate one cycle?” → static page or modal.
+- **Urgent contact**: Button/link to Blood Warriors support number / WhatsApp.
+- Legal/consent links: `Privacy`, `Terms`.
 
-and be referenced by both backend and AI/ML agents when they implement matching logic.
+***
 
+## UX Rules & Edge Cases
+
+1. **Cooldown state**
+   - If donor is on cooldown:
+     - Disable `Confirm` buttons.
+     - Show: `You’re temporarily on hold until [date] for your safety.`
+   - Backend ensures no cycle confirmation is accepted during this window.
+
+2. **Inactive state**
+   - If status = `INACTIVE`:
+     - Show banner: `You are currently paused.`
+     - Only actions:
+       - `Resume participation`
+       - Edit profile
+   - No cycle invites are shown.
+
+3. **Unassigned donor**
+   - If donor not yet in a pod:
+     - Hide pod panel; show “We’re matching you” message.
+     - Impact panel still shows previous donations if any.
+
+4. **Multiple pods (rare)**
+   - If donor is primary in one pod and backup in another:
+     - Upcoming section shows the **primary pod’s next cycle** first.
+     - Secondary commitments can appear in “Other opportunities”.
+
+***
+
+## API Summary (for devs)
+
+- `GET /donor/{id}` → summary header
+- `PATCH /donor/{id}` → update basic info
+- `PATCH /donor/{id}/status` → active/inactive/cooldown
+- `GET /donor/{id}/next-cycle` → upcoming donation info
+- `POST /donor/{id}/confirm-cycle` → confirm
+- `POST /donor/{id}/decline-cycle` → decline
+- `POST /donor/{id}/reschedule-suggestion` → suggest alt time
+- `GET /donor/{id}/pod` → pod info
+- `GET /donor/{id}/impact` → impact stats & history
+- `PATCH /donor/{id}/preferences/contact`
+- `PATCH /donor/{id}/preferences/availability`
+- `PATCH /donor/{id}/preferences/language`
+- `PATCH /donor/{id}/notes`
+
+***
+
+If you want, I can also turn this into a quick **wireframe sketch description** (section-wise layout) or a JSON UI schema that your React agent can consume directly.

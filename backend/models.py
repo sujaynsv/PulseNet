@@ -16,6 +16,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, func
+# Trigger reload
+
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -65,6 +67,8 @@ class User(Base):
     general_availability: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     bridge_preference: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=True)
     travel_radius: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    languages: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    medical_notes: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     # Patient-specific columns
     expected_next_transfusion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
