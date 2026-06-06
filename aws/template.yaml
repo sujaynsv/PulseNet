@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PulseNet — AWS App Runner Deployment
+# Architecture:
+#   ECR (Docker images) → App Runner (Backend + Frontend) → RDS (PostgreSQL)
+#   SNS/SES → Notifications   |   SageMaker → ML Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+Description: PulseNet Blood Warriors Hackathon — AI Care Coordination Platform
+
+Parameters:
+  Environment:
+    Type: String
+    Default: development
+    AllowedValues: [development, staging, production]
+
+  # RDS connection — use Secrets Manager in production
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: PostgreSQL connection string (from AWS RDS)
+
+  SecretKey:
+    Type: String
+    NoEcho: true
+    Description: FastAPI JWT secret key
+
+  BackendImageUri:
+    Type: String
+    Description: ECR image URI for FastAPI backend (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com/pulsenet-backend:latest)
+
+  FrontendImageUri:
+    Type: String
+    Description: ECR image URI for React/Vite frontend
+
+  # Optional
+  SageMakerEndpoint:
+    Type: String
+    Default: pulsenet-xgboost-endpoint
+
+  SnsTopicArn:
+    Type: String
+    Default: ''
+
+Resources:
+  # ── IAM Role for App Runner ─────────────────────────────────────────────
+  AppRunnerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PulseNetAppRunnerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: tasks.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+        - arn:aws:iam::aws:policy/AmazonSESFullAccess
+      Policies:
+        - PolicyName: SecretsManagerRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  # ── ECR Repositories ────────────────────────────────────────────────────
+  BackendECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pulsenet-backend
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  FrontendECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pulsenet-frontend
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ── App Runner: FastAPI Backend ─────────────────────────────────────────
+  BackendService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: pulsenet-backend
+      SourceConfiguration:
+        ImageRepository:
+          ImageIdentifier: !Ref BackendImageUri
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: '8000'
+            RuntimeEnvironmentVariables:
+              - Name: DATABASE_URL
+                Value: !Ref DatabaseUrl
+              - Name: SECRET_KEY
+                Value: !Ref SecretKey
+              - Name: ENV
+                Value: !Ref Environment
+              - Name: SAGEMAKER_ENDPOINT_NAME
+                Value: !Ref SageMakerEndpoint
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      InstanceConfiguration:
+        Cpu: '1 vCPU'
+        Memory: '2 GB'
+        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /api/health
+        Interval: 15
+        Timeout: 5
+        HealthyThreshold: 2
+        UnhealthyThreshold: 3
+
+  # ── App Runner: React + Vite Frontend ──────────────────────────────────
+  FrontendService:
+    Type: AWS::AppRunner::Service
+    DependsOn: BackendService
+    Properties:
+      ServiceName: pulsenet-frontend
+      SourceConfiguration:
+        ImageRepository:
+          ImageIdentifier: !Ref FrontendImageUri
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: '80'
+            RuntimeEnvironmentVariables:
+              - Name: VITE_API_URL
+                Value: !Sub 'https://${BackendService.ServiceUrl}'
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      InstanceConfiguration:
+        Cpu: '0.5 vCPU'
+        Memory: '1 GB'
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /
+        Interval: 30
+        Timeout: 10
+
+  # ── CloudWatch Log Group ────────────────────────────────────────────────
+  PulseNetLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /pulsenet/app
+      RetentionInDays: 7    # Keep costs low during hackathon
+
+Outputs:
+  BackendURL:
+    Description: FastAPI Backend URL (App Runner)
+    Value: !Sub 'https://${BackendService.ServiceUrl}'
+    Export:
+      Name: PulseNetBackendURL
+
+  FrontendURL:
+    Description: React Frontend URL (App Runner)
+    Value: !Sub 'https://${FrontendService.ServiceUrl}'
+    Export:
+      Name: PulseNetFrontendURL
+
+  BackendECRUri:
+    Description: ECR URI for backend image pushes
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/pulsenet-backend'
+
+  FrontendECRUri:
+    Description: ECR URI for frontend image pushes
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/pulsenet-frontend'

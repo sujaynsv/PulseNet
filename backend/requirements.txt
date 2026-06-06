@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────
+# PulseNet Backend — Python dependencies
+# ──────────────────────────────────────────────
+
+# Web framework & ASGI server
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+
+# Database — async driver + ORM
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Data validation (Pydantic v2)
+pydantic==2.7.1
+pydantic-settings==2.3.0
+
+# Machine learning inference placeholder
+scikit-learn==1.5.0
+xgboost==2.0.3
+pandas==2.2.2
+numpy==1.26.4
+joblib==1.4.2
+
+# HTTP client (for webhook / outbound calls)
+httpx==0.27.0
+
+# Auth utilities
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Geospatial (distance-based ranking)
+geopy==2.4.1
+
+# Utility
+python-dotenv==1.0.1
+python-multipart==0.0.9
+
+# Dev-only (excluded from production wheels via multi-stage)
+# pytest pytest-asyncio httpx[testing]
