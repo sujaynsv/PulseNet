@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Users, Heart, LogOut, Activity,
-  User as UserIcon, GitBranch, Clock, Zap, MapPin
+  User as UserIcon, GitBranch, Clock, Zap, MapPin, Droplets
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useQuery } from '@tanstack/react-query'
@@ -33,6 +33,7 @@ export function Sidebar() {
           { to: '/admin/emergencies', label: 'Emergencies', Icon: Zap, badge: openEmergencies ?? 0 },
           { to: '/admin/centers', label: 'Centers', Icon: MapPin },
           { to: '/admin/patients', label: 'Patients', Icon: Heart },
+          { to: '/admin/donors', label: 'Donors', Icon: Droplets },
         ]
       case 'Donor':
         return [

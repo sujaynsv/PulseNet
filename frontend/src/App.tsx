@@ -12,6 +12,7 @@ import { PodCentre } from './pages/admin/PodCentre'
 import { CycleReadiness } from './pages/admin/CycleReadiness'
 import { EmergencyBoard } from './pages/admin/EmergencyBoard'
 import { CenterStress } from './pages/admin/CenterStress'
+import { DonorDirectory } from './pages/admin/DonorDirectory'
 import { DonorHome } from './pages/donor/DonorHome'
 import { PatientHome } from './pages/patient/PatientHome'
 import { PatientProfile } from './pages/patient/PatientProfile'
@@ -57,6 +58,7 @@ function App() {
               <Route path="/admin/cycles" element={<AppLayout><CycleReadiness /></AppLayout>} />
               <Route path="/admin/emergencies" element={<AppLayout><EmergencyBoard /></AppLayout>} />
               <Route path="/admin/centers" element={<AppLayout><CenterStress /></AppLayout>} />
+              <Route path="/admin/donors" element={<AppLayout><DonorDirectory /></AppLayout>} />
             </Route>
 
             {/* Donor Routes */}
