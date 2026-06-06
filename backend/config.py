@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # ── App ────────────────────────────────────────────────────────────────
     ENV: str = "development"
     SECRET_KEY: str = "change-me-in-production"
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://[::1]:5173,http://[::1]:3000"
 
     # DEMO_MODE = True → bypass Cognito, use simple JWT for local testing
     DEMO_MODE: bool = True

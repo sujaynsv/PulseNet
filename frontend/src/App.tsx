@@ -61,24 +61,23 @@ function App() {
               <Route path="/admin/donors" element={<AppLayout><DonorDirectory /></AppLayout>} />
             </Route>
 
-            {/* Donor Routes */}
-            <Route element={<ProtectedRoute allowedRoles={['Donor']} />}>
-              <Route path="/donor" element={<AppLayout><DonorHome /></AppLayout>} />
-            </Route>
+          {/* Donor Routes */}
+          <Route element={<ProtectedRoute allowedRoles={['Donor']} />}>
+            <Route path="/donor" element={<AppLayout><DonorHome /></AppLayout>} />
+          </Route>
 
-            {/* Patient Routes */}
-            <Route element={<ProtectedRoute allowedRoles={['Patient']} />}>
-              <Route path="/patient" element={<AppLayout><PatientHome /></AppLayout>} />
-              <Route path="/patient/profile" element={<AppLayout><PatientProfile /></AppLayout>} />
-            </Route>
+          {/* Patient Routes */}
+          <Route element={<ProtectedRoute allowedRoles={['Patient']} />}>
+            <Route path="/patient" element={<AppLayout><PatientHome /></AppLayout>} />
+            <Route path="/patient/profile" element={<AppLayout><PatientProfile /></AppLayout>} />
+          </Route>
 
-            {/* Redirect root based on login status / role */}
-            <Route path="/" element={<RootRedirect />} />
-            <Route path="*" element={<Navigate to="/login" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </QueryClientProvider>
+          {/* Redirect root based on login status / role */}
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }
 

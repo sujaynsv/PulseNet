@@ -1011,3 +1011,17 @@ async def list_inactive_donors(
         .limit(limit)
     )
     return [DonorSummary.model_validate(d) for d in result.scalars().all()]
+
+
+@router.get("/donors/eligible", response_model=list[DonorSummary])
+async def list_eligible_donors(
+    _admin: AdminUser,
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(User)
+        .where(User.role == "Donor", User.eligibility_status == "eligible")
+        .limit(limit)
+    )
+    return [DonorSummary.model_validate(d) for d in result.scalars().all()]
