@@ -247,7 +247,7 @@ export function PatientHome() {
                 <Tooltip 
                   contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                   labelFormatter={(val) => new Date(val as string).toLocaleDateString()}
-                  formatter={(value: number) => [`${value} g/dL`, 'Hemoglobin']}
+                  formatter={(value: any) => [`${value} g/dL`, 'Hemoglobin']}
                 />
                 <Line type="monotone" dataKey="pretransfusion_hb" stroke="#ef4444" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
               </LineChart>

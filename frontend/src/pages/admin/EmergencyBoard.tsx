@@ -285,7 +285,7 @@ export function EmergencyBoard() {
             Open — {open.length} case{open.length !== 1 ? 's' : ''}
           </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14, marginBottom: 32 }}>
-            {open.map(ec => <EmergencyCard key={ec.id} ec={ec} />)}
+            {open.map((ec: any) => <EmergencyCard key={ec.id} ec={ec} />)}
           </div>
         </>
       )}
@@ -296,7 +296,7 @@ export function EmergencyBoard() {
             Resolved — {closed.length}
           </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
-            {closed.map(ec => <EmergencyCard key={ec.id} ec={ec} />)}
+            {closed.map((ec: any) => <EmergencyCard key={ec.id} ec={ec} />)}
           </div>
         </>
       )}

@@ -149,6 +149,8 @@ export function PodCentre() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'at_risk' | 'critical'>('all')
   const [selectedBridgeId, setSelectedBridgeId] = useState<number | null>(null)
   
+  const qc = useQueryClient()
+  
   const { data: pods, isLoading, isError, refetch } = useQuery({
     queryKey: ['pods'],
     queryFn: fetchPods,
@@ -293,7 +295,7 @@ export function PodCentre() {
                     </div>
                     <div style={{ flex: 1 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: 14 }}>Donor ID: {rec.donor_id}</span>
+                        <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: 14 }}>{rec.donor_name || `Donor #${rec.donor_id}`}</span>
                         <span style={{ 
                           fontSize: 12, fontWeight: 700, 
                           color: rec.match_score > 0.8 ? '#22c55e' : '#f59e0b',
@@ -302,6 +304,19 @@ export function PodCentre() {
                         }}>
                           {(rec.match_score * 100).toFixed(0)}% Match
                         </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>📞 {rec.donor_phone || 'N/A'}</span>
+                        {rec.blood_group && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12 }}>
+                            🩸 {rec.blood_group}
+                          </span>
+                        )}
+                        {rec.last_donation_date && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12 }}>
+                            🕒 Last: {new Date(rec.last_donation_date).toLocaleDateString()}
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
                     </div>

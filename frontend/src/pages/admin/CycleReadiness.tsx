@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, Phone, User as UserIcon, Activity } from 'lucide-react'
+import { Clock, AlertTriangle, CheckCircle, Zap, Droplets, MessageCircle, Phone, User as UserIcon, Activity, Users, RefreshCw, X } from 'lucide-react'
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { api } from '@/lib/api'
 
@@ -28,7 +28,7 @@ const STATE_CFG = {
   critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.2)',  icon: <Zap size={14} />, label: 'Critical' },
 }
 
-function DetailView({ cycle }: { cycle: CycleCard }) {
+function DetailView({ cycle, onFindBackups }: { cycle: CycleCard, onFindBackups: (id: number) => void }) {
   const cfg = STATE_CFG[cycle.state]
   const { data: bridge, isLoading: isLoadingBridge } = useQuery({
     queryKey: ['bridge', cycle.patient_id],
@@ -147,9 +147,27 @@ function DetailView({ cycle }: { cycle: CycleCard }) {
                       ✓ Confirmed
                     </span>
                   ) : slot.requirement_status === 'declined' ? (
-                    <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.15)', color: '#f87171', fontWeight: 600, border: '1px solid rgba(248,113,113,0.3)' }}>
-                      ✗ Declined
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.15)', color: '#f87171', fontWeight: 600, border: '1px solid rgba(248,113,113,0.3)' }}>
+                        ✗ Declined
+                      </span>
+                      <button
+                        onClick={() => onFindBackups(bridge.bridge_id)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 4,
+                          padding: '4px 10px',
+                          background: 'rgba(59, 130, 246, 0.15)',
+                          border: '1px solid rgba(59, 130, 246, 0.4)',
+                          borderRadius: 12,
+                          color: '#60a5fa',
+                          fontSize: 12, fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <Users size={12} /> Find Backups
+                      </button>
+                    </div>
                   ) : slot.requirement_status === 'waitlisted' ? (
                     <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 12, background: 'rgba(234,179,8,0.15)', color: '#facc15', fontWeight: 600, border: '1px solid rgba(250,204,21,0.3)' }}>
                       Waitlist
@@ -194,11 +212,29 @@ function DetailView({ cycle }: { cycle: CycleCard }) {
 export function CycleReadiness() {
   const [days, setDays] = useState(7)
   const [selectedCycleId, setSelectedCycleId] = useState<number | null>(null)
+  const [selectedBridgeIdForBackups, setSelectedBridgeIdForBackups] = useState<number | null>(null)
+
+  const qc = useQueryClient()
 
   const { data: cycles, isLoading } = useQuery({
     queryKey: ['upcoming-cycles', days],
     queryFn: () => fetchCycles(days),
     refetchInterval: 60000,
+  })
+
+  const { data: backups, isLoading: isLoadingBackups } = useQuery({
+    queryKey: ['recommendedBackups', selectedBridgeIdForBackups],
+    queryFn: () => api.get(`/api/admin/pods/${selectedBridgeIdForBackups}/recommended-backups`).then(r => r.data),
+    enabled: !!selectedBridgeIdForBackups
+  })
+
+  const addBackupMutation = useMutation({
+    mutationFn: (data: { pod_id: number, donor_id: number }) => 
+      api.post(`/api/admin/pods/${data.pod_id}/add-backup`, { donor_id: data.donor_id }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['upcoming-cycles', days] })
+      qc.invalidateQueries({ queryKey: ['recommendedBackups', selectedBridgeIdForBackups] })
+    }
   })
 
   // Auto-select first cycle on load
@@ -345,7 +381,7 @@ export function CycleReadiness() {
         {/* Right Panel: Detail View */}
         <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 16, padding: 28, minHeight: '600px' }}>
           {selectedCycle ? (
-            <DetailView cycle={selectedCycle} />
+            <DetailView cycle={selectedCycle} onFindBackups={setSelectedBridgeIdForBackups} />
           ) : (
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
                <Activity size={48} style={{ opacity: 0.2, marginBottom: 16 }} />
@@ -355,6 +391,105 @@ export function CycleReadiness() {
         </div>
 
       </div>
+
+      {selectedBridgeIdForBackups && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100
+        }}>
+          <div style={{
+            background: '#0f172a', border: '1px solid #1e293b', borderRadius: 16,
+            width: 600, maxWidth: '90vw', padding: 24,
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <div>
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Users size={20} color="#60a5fa" />
+                  AI Recommended Backups
+                </h2>
+                <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+                  Powered by Active Status Model & Eligibility Status Model
+                </p>
+              </div>
+              <button onClick={() => setSelectedBridgeIdForBackups(null)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {isLoadingBackups ? (
+              <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 12px' }} />
+                Running AI models...
+              </div>
+            ) : backups?.recommended_backups?.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto' }}>
+                {backups.recommended_backups.map((rec: any, idx: number) => (
+                  <div key={rec.donor_id} style={{
+                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+                    borderRadius: 12, padding: 16, display: 'flex', gap: 16, alignItems: 'center'
+                  }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: '50%', background: 'rgba(96, 165, 250, 0.1)',
+                      color: '#60a5fa', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 700, fontSize: 14
+                    }}>
+                      #{idx + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, color: '#f1f5f9', fontSize: 14 }}>{rec.donor_name || `Donor #${rec.donor_id}`}</span>
+                        <span style={{ 
+                          fontSize: 12, fontWeight: 700, 
+                          color: rec.match_score > 0.8 ? '#22c55e' : '#f59e0b',
+                          background: rec.match_score > 0.8 ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)',
+                          padding: '2px 8px', borderRadius: 12
+                        }}>
+                          {(rec.match_score * 100).toFixed(0)}% Match
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Phone size={10} /> {rec.donor_phone || 'N/A'}</span>
+                        {rec.blood_group && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12 }}>
+                            <Droplets size={10} /> {rec.blood_group}
+                          </span>
+                        )}
+                        {rec.last_donation_date && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: 12 }}>
+                            <Clock size={10} /> Last: {new Date(rec.last_donation_date).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: '#94a3b8' }}>{rec.reason}</div>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        addBackupMutation.mutate({ pod_id: selectedBridgeIdForBackups!, donor_id: rec.donor_id });
+                        setSelectedBridgeIdForBackups(null);
+                      }}
+                      disabled={addBackupMutation.isPending}
+                      style={{
+                      padding: '6px 12px', background: '#f1f5f9', color: '#0f172a',
+                      borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', 
+                      cursor: addBackupMutation.isPending ? 'not-allowed' : 'pointer',
+                      opacity: addBackupMutation.isPending ? 0.7 : 1
+                    }}>
+                      Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                No compatible backup donors found for this pod.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

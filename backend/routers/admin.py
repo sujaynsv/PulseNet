@@ -1527,6 +1527,10 @@ async def get_eligibility_status(
 
 class BackupRecommendation(BaseModel):
     donor_id: int
+    donor_name: Optional[str] = None
+    donor_phone: Optional[str] = None
+    blood_group: Optional[str] = None
+    last_donation_date: Optional[date] = None
     match_score: float
     reason: str
 
@@ -1591,6 +1595,10 @@ async def get_recommended_backups(
             
         recommendations.append(BackupRecommendation(
             donor_id=donor.id,
+            donor_name=donor.name,
+            donor_phone=donor.phone,
+            blood_group=donor.blood_group,
+            last_donation_date=donor.last_donation_date,
             match_score=match_score,
             reason=reason
         ))
